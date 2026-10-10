@@ -49,6 +49,7 @@ void openHome();
 void openMode(Mode m);
 void openLog();
 void openSetup();
+void powerDown(const char *reason);
 
 // --- widgets shared by the mode screens ------------------------------------------
 
@@ -911,9 +912,69 @@ void faxKey(char c)
     }
 }
 
+// --- power saving ------------------------------------------------------------------------
+
+uint32_t last_input = 0;    // millis() of the last key or wheel event
+uint32_t last_busy = 0;     // ... of the last reception or transmission
+bool display_off = false;
+
+void setDisplayOff(bool off)
+{
+    if (off == display_off) {
+        return;
+    }
+    display_off = off;
+    instance.setBrightness(off ? 0 : DEVICE_MAX_BRIGHTNESS_LEVEL);
+}
+
+/// Ends everything in an orderly way and puts the device into deep sleep. It
+/// restarts when the wheel or the BOOT button is pressed.
+void powerDown(const char *reason)
+{
+    setDisplayOff(false);
+    lv_obj_t *scr = makeScreen();
+    lv_obj_t *label = makeLabel(scr, 0, 84, kWidth, &lv_font_montserrat_14, kColText);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text_fmt(label, "%s\n\nPress the wheel to switch on again", reason);
+    lv_screen_load(scr);
+    lv_timer_handler();
+    Serial.printf("[dw] %s\n", reason);
+
+    engine::stop();
+    faxStopSaving();
+    web::shutdown();
+    settings.save();
+    delay(1200);
+    instance.sleep((WakeupSource_t)(WAKEUP_SRC_ROTARY_BUTTON | WAKEUP_SRC_BOOT_BUTTON));
+}
+
+/// Display off after the idle time without input; deep sleep once nothing has
+/// been received or sent for that time either.
+void pollPower(const engine::Status &st, bool received)
+{
+    uint32_t now = millis();
+    bool busy = received || st.transmitting || fax_saving || web::clients() > 0 ||
+                (engine::isSlotMode(st.mode) && strcmp(st.qso_state, "Idle") != 0);
+    if (busy) {
+        last_busy = now;
+    }
+    if (settings.sleep_min <= 0) {
+        setDisplayOff(false);
+        return;
+    }
+    uint32_t limit = (uint32_t)settings.sleep_min * 60000u;
+    if (now - last_input < limit) {
+        return;
+    }
+    setDisplayOff(true);
+    if (now - last_busy >= limit) {
+        powerDown("Sleeping, nothing received");
+    }
+}
+
 // --- setup screen ------------------------------------------------------------------------
 
-enum class Kind { Text, Number, Toggle };
+enum class Kind { Text, Number, Toggle, Action };
 enum class Chars { Call, Digits, Any };
 
 struct Field {
@@ -950,6 +1011,8 @@ Field fields[] = {
     {"PTT output", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.ptt_active_high, "active high", "active low"},
     {"Wi-Fi access point", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.wifi_on, "on", "off"},
     {"Wi-Fi password", Kind::Text, settings.wifi_pass, sizeof(settings.wifi_pass), Chars::Any, nullptr, 0, 0, 0, "", nullptr, "", ""},
+    {"Sleep when idle after", Kind::Number, nullptr, 0, Chars::Call, &settings.sleep_min, 0, 30, 1, " min (0 = never)", nullptr, "", ""},
+    {"Switch off", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
 };
 constexpr int kFields = sizeof(fields) / sizeof(fields[0]);
 constexpr int kSetRows = 9;
@@ -997,6 +1060,9 @@ void drawSetup()
         case Kind::Toggle:
             lv_label_set_text(set_value[i], *f.toggle ? f.on : f.off);
             break;
+        case Kind::Action:
+            lv_label_set_text(set_value[i], "press the wheel");
+            break;
         }
         lv_obj_set_style_bg_color(set_bg[i], active ? (editing ? kColEdit : kColSel) : kColBg, 0);
     }
@@ -1039,6 +1105,11 @@ void setupRotate(int dir)
 
 void setupPress()
 {
+    if (fields[set_selected].kind == Kind::Action) {
+        settings.dial_khz = (uint32_t)atol(dial_text);
+        powerDown("Switched off");
+        return;
+    }
     editing = !editing;
     drawSetup();
 }
@@ -1294,6 +1365,16 @@ void pollInput()
     bool pressed = msg.centerBtnPressed && !was_pressed;
     was_pressed = msg.centerBtnPressed;
 
+    // The first key or wheel event with the display off only switches it on again
+    if (dir != 0 || pressed) {
+        last_input = millis();
+        if (display_off) {
+            setDisplayOff(false);
+            dir = 0;
+            pressed = false;
+        }
+    }
+
     if (dir != 0) {
         switch (screen) {
         case Screen::Home: homeRotate(dir); break;
@@ -1329,6 +1410,11 @@ void pollInput()
 
     char c = 0;
     while (instance.getKeyChar(&c) == KB_PRESSED) {
+        last_input = millis();
+        if (display_off) {
+            setDisplayOff(false);
+            continue;
+        }
         switch (screen) {
         case Screen::Home:
             if (c == '\n' || c == '\r') {
@@ -1434,18 +1520,25 @@ void loop()
     }
 
     // Received text and picture lines are collected whichever screen is shown
+    static uint32_t seen_seq = 0;
+    engine::Status st = engine::status();
+    bool received = st.history_seq != seen_seq;
+    seen_seq = st.history_seq;
     char buf[64];
     size_t n;
     while ((n = engine::readText(buf, sizeof(buf))) > 0) {
         appendText(buf, n);
+        received = true;
     }
     processFax();
+    pollPower(st, received);
 
     updateGridFromGps();
     web::loop();
 
-    drawWaterfall(screen == Screen::Slot ? &slot_wf : (screen == Screen::Text ? &text_wf : nullptr));
-    if (millis() - last_draw >= 200) {
+    // Nothing is drawn while the display is off; the waterfall rows are still fetched
+    drawWaterfall(display_off ? nullptr : (screen == Screen::Slot ? &slot_wf : (screen == Screen::Text ? &text_wf : nullptr)));
+    if (!display_off && millis() - last_draw >= 200) {
         last_draw = millis();
         switch (screen) {
         case Screen::Home: drawHome(); break;

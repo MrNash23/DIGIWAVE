@@ -28,6 +28,7 @@ struct Settings {
     bool rtty_reverse = false;
     int navtex_center = 1000;
     bool navtex_reverse = false;
+    int sleep_min = 3;          // sleep after this time without input and reception, 0 = never
     int last_mode = 0;          // engine::Mode active at power-off
 
     void load();

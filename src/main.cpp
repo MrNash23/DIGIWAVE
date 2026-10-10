@@ -8,6 +8,9 @@
 #include "timebase.h"
 #include "ui.h"
 
+// Drawing with LVGL needs more than the 8 kB the main task gets by default
+SET_LOOP_TASK_STACK_SIZE(24 * 1024);
+
 void setup()
 {
     Serial.begin(115200);

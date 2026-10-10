@@ -496,6 +496,18 @@ bool running()
     return active;
 }
 
+int clients()
+{
+    return active ? WiFi.softAPgetStationNum() : 0;
+}
+
+void shutdown()
+{
+    if (active) {
+        stop();
+    }
+}
+
 const char *address()
 {
     return addr;

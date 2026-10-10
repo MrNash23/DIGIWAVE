@@ -66,6 +66,8 @@ volatile bool halt_request = false;
 int16_t *capture_buf = nullptr;
 volatile size_t capture_want = 0, capture_have = 0;
 volatile bool reconfigure = false;
+volatile bool stop_request = false;
+volatile bool stopped = false;
 volatile Mode requested_mode = Mode::FT8;
 volatile int fax_shift_request = 0;
 volatile bool fax_rephase_request = false;
@@ -615,6 +617,12 @@ void task(void *)
     enterMode(current, true);
 
     for (;;) {
+        if (stop_request) {
+            ptt->set(false);
+            audio->setOutputEnabled(false);
+            stopped = true;
+            vTaskDelete(nullptr);
+        }
         Mode want = requested_mode;
         if (want != current) {
             current = want;
@@ -739,6 +747,16 @@ void halt()
     halt_request = true;
     xQueueReset(tx_text_queue);
     refreshQsoStatus();
+}
+
+void stop()
+{
+    halt();
+    stop_request = true;
+    for (int i = 0; i < 300 && !stopped; ++i) {
+        delay(10);
+    }
+    ptt->set(false);
 }
 
 void capture(size_t samples)

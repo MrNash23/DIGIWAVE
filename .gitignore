@@ -7,3 +7,6 @@ platformio_local.ini
 backup/
 firmware/
 __pycache__/
+
+# Original photos; web-sized copies are in docs/
+DigiWave-Productshots/

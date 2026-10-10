@@ -38,6 +38,7 @@ void Settings::load()
     rtty_reverse = p.getBool("ryrev", rtty_reverse);
     navtex_center = p.getInt("nxctr", navtex_center);
     navtex_reverse = p.getBool("nxrev", navtex_reverse);
+    sleep_min = p.getInt("sleep", sleep_min);
     last_mode = p.getInt("mode", last_mode);
     p.end();
 }
@@ -72,6 +73,7 @@ void Settings::save() const
     p.putBool("ryrev", rtty_reverse);
     p.putInt("nxctr", navtex_center);
     p.putBool("nxrev", navtex_reverse);
+    p.putInt("sleep", sleep_min);
     p.putInt("mode", last_mode);
     p.end();
 }

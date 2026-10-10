@@ -14,6 +14,12 @@ void loop();
 
 bool running();
 
+/// Number of phones connected to the access point.
+int clients();
+
+/// Switches Wi-Fi off without changing the settings, before the device goes to sleep.
+void shutdown();
+
 /// Address to open in the browser, or an empty string while Wi-Fi is off.
 const char *address();
 

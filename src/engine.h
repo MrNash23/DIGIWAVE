@@ -63,6 +63,10 @@ bool nextWaterfallRow(uint8_t *row);
 /// Stops transmitting; in FT8/FT4 also drops the current QSO.
 void halt();
 
+/// Ends the task and releases the audio path and the PTT line, before the
+/// device goes to sleep. There is no way back other than a restart.
+void stop();
+
 /// Diagnostics: records the next samples of received audio (12 kHz). captured()
 /// returns them once the recording is complete, nullptr before.
 void capture(size_t samples);
