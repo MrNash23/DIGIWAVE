@@ -1,0 +1,9 @@
+.pio/
+.vscode/
+.DS_Store
+platformio_local.ini
+
+# Flash backup of the device and third-party firmware images
+backup/
+firmware/
+__pycache__/

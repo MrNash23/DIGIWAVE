@@ -1,0 +1,10 @@
+{
+  "name": "ft8_lib",
+  "version": "0.0.0+9fec6ca",
+  "description": "Vendored copy of kgoba/ft8_lib (MIT), commit 9fec6ca, without common/audio.*",
+  "build": {
+    "srcDir": ".",
+    "includeDir": ".",
+    "srcFilter": ["+<ft8/*.c>", "+<fft/*.c>", "+<common/*.c>"]
+  }
+}

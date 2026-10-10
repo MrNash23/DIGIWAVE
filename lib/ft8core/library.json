@@ -1,0 +1,7 @@
+{
+  "name": "ft8core",
+  "version": "0.1.0",
+  "description": "Hardware-independent FT8 decoder, encoder and QSO logic on top of ft8_lib",
+  "dependencies": { "ft8_lib": "*" },
+  "build": { "srcDir": "src", "includeDir": "src" }
+}

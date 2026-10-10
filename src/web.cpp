@@ -1,0 +1,504 @@
+#include "web.h"
+
+#include <LilyGoLib.h>
+#include <SD.h>
+#include <WebServer.h>
+#include <WiFi.h>
+
+#include "assets/assets.h"
+#include "engine.h"
+#include "logbook.h"
+#include "settings.h"
+#include "timebase.h"
+#include "ui.h"
+
+namespace web {
+
+const char kSsid[] = "DIGIWAVE";
+
+namespace {
+
+WebServer server(80);
+bool active = false;
+char addr[32] = "";
+
+const char kPage[] PROGMEM = R"HTML(<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DIGIWAVE</title>
+<link rel="icon" href="/icon.png"><link rel="apple-touch-icon" href="/icon.png">
+<style>
+:root{color-scheme:dark}
+body{margin:0;font:15px/1.35 system-ui,sans-serif;background:#030513;color:#d8dade}
+header{position:sticky;top:0;background:#070a1e;padding:10px 12px;border-bottom:1px solid #202d7a}
+#top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+#utc{font-size:20px;font-variant-numeric:tabular-nums}
+#state{margin-top:4px;min-height:1.35em}
+.tx{color:#ff1ed7}.dim{color:#8a8f99}
+#bar{height:4px;background:#2c2f36;margin-top:8px;border-radius:2px;overflow:hidden}
+#bar div{height:100%;background:#00f5f8;width:0}
+.btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid #3a3e47;background:#23262d;color:inherit}
+button.on{background:#6a1560;border-color:#ff1ed7}
+button.sel{background:#202d7a;border-color:#00f5f8}
+#modes button{padding:6px 10px}
+pre{white-space:pre-wrap;word-break:break-word;font:14px/1.4 ui-monospace,monospace;background:#16181c;border-radius:8px;padding:10px;min-height:8em;margin:0}
+.hide{display:none}
+main{padding:0 12px 24px}
+h2{font-size:14px;color:#8a8f99;margin:18px 0 6px;font-weight:600}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+td{padding:7px 4px;border-bottom:1px solid #22252b;white-space:nowrap}
+td.m{white-space:normal;width:100%}
+tr.cq td.m{color:#00f5f8}tr.me td.m{color:#ff1ed7}
+td.n{text-align:right;color:#8a8f99}
+label{display:block;margin:8px 0 2px;color:#8a8f99;font-size:13px}
+input[type=text],input[type=number]{font:inherit;width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid #3a3e47;background:#16181c;color:inherit}
+.row{display:flex;gap:10px}.row>div{flex:1}
+a{color:#00f5f8}
+#msg{color:#e0a020;min-height:1.35em;margin-top:6px}
+</style></head><body>
+<header>
+<div id="top"><span id="utc">--:--:--</span><span id="src" class="dim"></span><span id="me" class="dim"></span></div>
+<div id="state"></div>
+<div id="bar"><div></div></div>
+<div class="btns" id="modes"></div>
+<div class="btns">
+<button id="btx" class="slot" onclick="cmd(S.txen?'txoff':'txon')">TX off</button>
+<button class="slot" onclick="cmd('cq')">Call CQ</button>
+<button onclick="cmd('halt')">Halt</button>
+</div>
+<div id="msg"></div>
+</header>
+<main>
+<section id="pslot">
+<h2>Decodes &ndash; tap a station to call it</h2>
+<table id="list"></table>
+</section>
+<section id="ptext">
+<h2>Received text</h2>
+<pre id="text"></pre>
+<form id="sendform" onsubmit="sendText(event)"><div class="row"><div><input type="text" id="tosend" maxlength="78" autocapitalize="characters" placeholder="Text to send"></div>
+<div style="flex:0"><button type="submit">Send</button></div></div></form>
+</section>
+<section id="pfax">
+<h2>WEFAX pictures on the SD card</h2>
+<div id="faxlist" class="dim">none yet</div>
+</section>
+<h2>Station</h2>
+<form onsubmit="save(event)">
+<div class="row"><div><label>Callsign</label><input type="text" id="call" maxlength="13" autocapitalize="characters"></div>
+<div><label>Locator</label><input type="text" id="grid" maxlength="4" autocapitalize="characters"></div></div>
+<label><input type="checkbox" id="gridauto"> Locator from GPS</label>
+<div class="row"><div><label>Dial frequency (kHz)</label><input type="number" id="dial" min="0" max="450000"></div>
+<div><label>TX audio (Hz)</label><input type="number" id="txhz" min="300" max="2800" step="50"></div></div>
+<div class="btns"><button type="submit">Save</button></div>
+</form>
+<h2>Logbook</h2>
+<p><span id="qsos">0</span> QSOs &middot; <a href="/log.adi" download="digiwave.adi">Download ADIF file</a></p>
+</main>
+<script>
+let S={},filled=false;
+const $=id=>document.getElementById(id);
+function note(t){$('msg').textContent=t;setTimeout(()=>{if($('msg').textContent==t)$('msg').textContent=''},4000)}
+async function post(url,data){
+  const r=await fetch(url,{method:'POST',body:new URLSearchParams(data)});
+  const t=await r.text();note(t);poll();
+}
+function cmd(c){post('/api/cmd',{c})}
+function setMode(m){post('/api/mode',{m})}
+function sendText(e){e.preventDefault();const t=$('tosend').value;if(t){post('/api/send',{t});$('tosend').value=''}}
+let faxAt=0;
+async function loadFax(){
+  try{const l=await (await fetch('/api/fax')).json();const d=$('faxlist');
+    if(!l.length){d.textContent='none yet';return}
+    d.textContent='';d.className='';
+    for(const n of l.reverse()){const a=document.createElement('a');a.href='/fax?f='+encodeURIComponent(n);a.textContent=n;a.target='_blank';
+      const p=document.createElement('p');p.appendChild(a);d.appendChild(p)}
+  }catch(e){}
+}
+function save(e){e.preventDefault();post('/api/settings',{call:$('call').value,grid:$('grid').value,
+  gridauto:$('gridauto').checked?1:0,dial:$('dial').value,txhz:$('txhz').value})}
+function answer(h){if(confirm('Call '+h.de+'?'))post('/api/answer',{slot:h.slot,f:h.f})}
+function render(){
+  const ms=$('modes');
+  if(!ms.children.length)S.modes.forEach((n,i)=>{const b=document.createElement('button');b.textContent=n;b.onclick=()=>setMode(i);ms.appendChild(b)});
+  [...ms.children].forEach((b,i)=>b.className=i==S.mode?'sel':'');
+  const slot=S.mode<2,text=S.mode>=2&&S.mode<=4,fax=S.mode==5;
+  $('pslot').className=slot?'':'hide';$('ptext').className=text?'':'hide';$('pfax').className=fax?'':'hide';
+  document.querySelectorAll('.slot').forEach(b=>b.style.display=slot?'':'none');
+  $('sendform').className=S.cansend?'':'hide';
+  if(text)$('text').textContent=S.text;
+  if(fax&&Date.now()-faxAt>10000){faxAt=Date.now();loadFax()}
+  $('utc').textContent=S.utc;$('src').textContent=S.src;
+  $('me').textContent=(S.call||'no callsign')+' '+(S.grid||'');
+  const st=$('state');st.className=S.tx?'tx':'';
+  st.textContent=S.modes[S.mode]+(S.tx?'  TX  '+(slot?S.txtext:''):'  RX  '+(slot?S.qso+(S.dx?' '+S.dx:''):S.info));
+  document.querySelector('#bar div').style.width=S.slot+'%';
+  const b=$('btx');b.textContent=S.txen?'TX ON':'TX off';b.className=S.txen?'on':'';
+  $('qsos').textContent=S.qsos;
+  if(!filled){filled=true;$('call').value=S.call;$('grid').value=S.grid;$('gridauto').checked=S.gridauto;
+    $('dial').value=S.dial;$('txhz').value=S.txhz}
+  const tb=$('list');tb.textContent='';
+  for(const h of S.hist.slice().reverse()){
+    const tr=document.createElement('tr');tr.className=h.me?'me':(h.cq?'cq':'');
+    for(const [c,v] of [['',h.t],['n',(h.snr>=0?'+':'')+h.snr],['n',h.f],['m',h.m],['n',(h.g+(h.c?' ('+h.c+')':'')).trim()]]){
+      const td=document.createElement('td');td.className=c;td.textContent=v;tr.appendChild(td)}
+    if(h.de)tr.onclick=()=>answer(h);
+    tb.appendChild(tr)}
+}
+async function poll(){try{S=await (await fetch('/api/state')).json();render()}catch(e){}}
+setInterval(poll,2000);poll();
+</script></body></html>
+)HTML";
+
+void appendJsonString(String &out, const char *s)
+{
+    out += '"';
+    for (; *s; ++s) {
+        if (*s == '"' || *s == '\\') {
+            out += '\\';
+        }
+        if (*s == '\n') {
+            out += "\\n";
+        } else if ((unsigned char)*s >= 0x20) {
+            out += *s;
+        }
+    }
+    out += '"';
+}
+
+void handleState()
+{
+    static engine::Entry hist[engine::kHistory];
+    engine::Status st = engine::status();
+    int n = engine::history(hist, engine::kHistory);
+    int64_t now = timebase::utcMs();
+    uint32_t secs = (uint32_t)(now / 1000);
+
+    int slot_ms = st.mode == engine::Mode::FT4 ? 7500 : 15000;
+
+    String out;
+    out.reserve(8000);
+    char buf[160];
+    snprintf(buf, sizeof(buf), "{\"utc\":\"%02u:%02u:%02u\",\"src\":\"%s\",\"slot\":%d,\"tx\":%s,\"txen\":%s,\"level\":%d,",
+             (unsigned)(secs / 3600 % 24), (unsigned)(secs / 60 % 60), (unsigned)(secs % 60), timebase::sourceName(),
+             (int)((now % slot_ms) * 100 / slot_ms), st.transmitting ? "true" : "false", st.tx_enabled ? "true" : "false", st.level);
+    out += buf;
+    snprintf(buf, sizeof(buf), "\"mode\":%d,\"cansend\":%s,\"modes\":[", (int)st.mode,
+             engine::canSendText(st.mode) ? "true" : "false");
+    out += buf;
+    for (int i = 0; i < engine::kModes; ++i) {
+        out += i ? ",\"" : "\"";
+        out += engine::modeName((engine::Mode)i);
+        out += '"';
+    }
+    out += "],\"text\":";
+    appendJsonString(out, engine::isTextMode(st.mode) ? ui::recentText() : "");
+    // One line of receiver state for the modes without a QSO sequence
+    if (st.mode == engine::Mode::CW) {
+        snprintf(buf, sizeof(buf), "%d WPM  %d Hz  %s", st.wpm, st.tune_hz, st.locked ? "signal" : "no signal");
+    } else if (st.mode == engine::Mode::RTTY) {
+        snprintf(buf, sizeof(buf), "%d/%d Hz%s  %s", settings.rtty_mark, settings.rtty_mark + settings.rtty_shift,
+                 st.option ? " rev" : "", st.locked ? "signal" : "no signal");
+    } else if (st.mode == engine::Mode::NAVTEX) {
+        snprintf(buf, sizeof(buf), "centre %d Hz%s  %s", settings.navtex_center, st.option ? " rev" : "",
+                 st.locked ? "in step" : "searching");
+    } else {
+        buf[0] = '\0';
+    }
+    out += ",\"info\":";
+    appendJsonString(out, buf);
+    out += ",\"txtext\":";
+    appendJsonString(out, st.tx_text);
+    out += ",\"qso\":";
+    appendJsonString(out, st.qso_state);
+    out += ",\"dx\":";
+    appendJsonString(out, st.dx_call);
+    out += ",\"call\":";
+    appendJsonString(out, settings.call);
+    out += ",\"grid\":";
+    appendJsonString(out, settings.grid);
+    snprintf(buf, sizeof(buf), ",\"gridauto\":%s,\"dial\":%u,\"txhz\":%d,\"qsos\":%d,\"hist\":[",
+             settings.grid_auto ? "true" : "false", (unsigned)settings.dial_khz, settings.tx_hz, logbook::total());
+    out += buf;
+    for (int i = 0; i < n; ++i) {
+        const engine::Entry &e = hist[i];
+        uint32_t t = e.slot_utc;
+        snprintf(buf, sizeof(buf), "%s{\"t\":\"%02u%02u%02u\",\"slot\":%u,\"snr\":%d,\"f\":%d,\"cq\":%s,\"me\":%s,\"de\":",
+                 i ? "," : "", (unsigned)(t / 3600 % 24), (unsigned)(t / 60 % 60), (unsigned)(t % 60), (unsigned)t, e.msg.snr,
+                 (int)e.msg.freq, e.msg.is_cq ? "true" : "false", e.to_me ? "true" : "false");
+        out += buf;
+        appendJsonString(out, e.msg.call_de);
+        out += ",\"g\":";
+        appendJsonString(out, e.grid);
+        out += ",\"c\":";
+        appendJsonString(out, e.country);
+        out += ",\"m\":";
+        appendJsonString(out, e.msg.text);
+        out += '}';
+    }
+    out += "]}";
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", out);
+}
+
+bool stationConfigured()
+{
+    // CB messages carry no locator
+    return settings.call[0] != '\0' && (settings.cb_mode || strlen(settings.grid) >= 4);
+}
+
+void handleCmd()
+{
+    String c = server.arg("c");
+    if (c == "txoff") {
+        engine::setTxEnabled(false);
+        server.send(200, "text/plain", "TX off");
+    } else if (c == "halt") {
+        engine::halt();
+        server.send(200, "text/plain", "Halted");
+    } else if (!stationConfigured()) {
+        server.send(200, "text/plain", "Set callsign and locator first");
+    } else if (c == "txon") {
+        if (!timebase::valid()) {
+            server.send(200, "text/plain", "No time source - TX stays off");
+            return;
+        }
+        engine::setTxEnabled(true);
+        server.send(200, "text/plain", "TX enabled");
+    } else if (c == "cq") {
+        engine::startCq();
+        server.send(200, "text/plain", engine::status().tx_enabled ? "Calling CQ" : "CQ armed - TX is off");
+    } else {
+        server.send(400, "text/plain", "Unknown command");
+    }
+}
+
+void handleAnswer()
+{
+    static engine::Entry hist[engine::kHistory];
+    if (!stationConfigured()) {
+        server.send(200, "text/plain", "Set callsign and locator first");
+        return;
+    }
+    uint32_t slot = (uint32_t)strtoul(server.arg("slot").c_str(), nullptr, 10);
+    int freq = server.arg("f").toInt();
+    int n = engine::history(hist, engine::kHistory);
+    for (int i = 0; i < n; ++i) {
+        const engine::Entry &e = hist[i];
+        if (e.slot_utc == slot && (int)e.msg.freq == freq && e.msg.call_de[0] != '\0' && strcmp(e.msg.call_de, settings.call) != 0) {
+            engine::answer(e);
+            String reply = String("Calling ") + e.msg.call_de + (engine::status().tx_enabled ? "" : " - TX is off");
+            server.send(200, "text/plain", reply);
+            return;
+        }
+    }
+    server.send(200, "text/plain", "Message no longer in the list");
+}
+
+bool validCall(const String &s)
+{
+    if (s.length() < 3 || s.length() > 13) {
+        return false;
+    }
+    for (char c : s) {
+        if (!isalnum((unsigned char)c) && c != '/') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validGrid(const String &s)
+{
+    return s.length() == 4 && s[0] >= 'A' && s[0] <= 'R' && s[1] >= 'A' && s[1] <= 'R' && isdigit((unsigned char)s[2]) &&
+           isdigit((unsigned char)s[3]);
+}
+
+void handleSettings()
+{
+    String call = server.arg("call");
+    String grid = server.arg("grid");
+    call.trim();
+    grid.trim();
+    call.toUpperCase();
+    grid.toUpperCase();
+    bool grid_auto = server.arg("gridauto").toInt() != 0;
+    if (!validCall(call)) {
+        server.send(200, "text/plain", "Callsign not valid - nothing saved");
+        return;
+    }
+    // With the locator taken from GPS the field may be empty until there is a fix
+    if (!validGrid(grid) && !((grid_auto || settings.cb_mode) && grid.length() == 0)) {
+        server.send(200, "text/plain", "Locator must look like JO62 - nothing saved");
+        return;
+    }
+    strncpy(settings.call, call.c_str(), sizeof(settings.call) - 1);
+    if (grid.length() == 4) {
+        strncpy(settings.grid, grid.c_str(), sizeof(settings.grid) - 1);
+    }
+    settings.grid_auto = grid_auto;
+    settings.dial_khz = (uint32_t)constrain(server.arg("dial").toInt(), 0L, 450000L);
+    settings.tx_hz = constrain((int)server.arg("txhz").toInt(), 300, 2800);
+    settings.save();
+    engine::applySettings();
+    server.send(200, "text/plain", "Saved");
+}
+
+void handleMode()
+{
+    int m = server.arg("m").toInt();
+    if (m < 0 || m >= engine::kModes) {
+        server.send(400, "text/plain", "Unknown mode");
+        return;
+    }
+    ui::selectMode(m);
+    server.send(200, "text/plain", engine::modeName((engine::Mode)m));
+}
+
+void handleSend()
+{
+    String t = server.arg("t");
+    t.trim();
+    server.send(200, "text/plain", ui::submitText(t.c_str()) ? "Sending" : "This mode cannot send text");
+}
+
+void handleFaxList()
+{
+    String out = "[";
+    instance.lockSPI();
+    if (SD.cardType() != CARD_NONE) {
+        File dir = SD.open(ui::kFaxDir);
+        if (dir && dir.isDirectory()) {
+            for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+                if (!f.isDirectory() && out.length() < 4000) {
+                    if (out.length() > 1) {
+                        out += ',';
+                    }
+                    appendJsonString(out, f.name());
+                }
+                f.close();
+            }
+        }
+    }
+    instance.unlockSPI();
+    out += "]";
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", out);
+}
+
+void handleFax()
+{
+    String name = server.arg("f");
+    // Only plain file names from the picture directory
+    if (name.length() == 0 || name.indexOf('/') >= 0 || name.indexOf("..") >= 0) {
+        server.send(400, "text/plain", "Bad file name");
+        return;
+    }
+    String path = String(ui::kFaxDir) + "/" + name;
+    instance.lockSPI();
+    File f;
+    if (SD.cardType() != CARD_NONE && SD.exists(path)) {
+        f = SD.open(path, FILE_READ);
+    }
+    if (f) {
+        server.streamFile(f, "image/bmp");
+        f.close();
+        instance.unlockSPI();
+        return;
+    }
+    instance.unlockSPI();
+    server.send(404, "text/plain", "No such picture");
+}
+
+void handleLog()
+{
+    // The card shares the SPI bus with the display, which is drawn from this same thread
+    instance.lockSPI();
+    File f;
+    if (SD.cardType() != CARD_NONE && SD.exists(logbook::kPath)) {
+        f = SD.open(logbook::kPath, FILE_READ);
+    }
+    if (f) {
+        server.sendHeader("Content-Disposition", "attachment; filename=\"digiwave.adi\"");
+        server.streamFile(f, "text/plain");
+        f.close();
+        instance.unlockSPI();
+        return;
+    }
+    instance.unlockSPI();
+    server.send(404, "text/plain", "No logbook on the SD card yet");
+}
+
+void start()
+{
+    WiFi.mode(WIFI_AP);
+    // WPA2 needs at least 8 characters; a shorter password would open the network
+    const char *pass = strlen(settings.wifi_pass) >= 8 ? settings.wifi_pass : "digiwave";
+    if (!WiFi.softAP(kSsid, pass)) {
+        Serial.println("[web] access point did not start");
+        WiFi.mode(WIFI_OFF);
+        return;
+    }
+    snprintf(addr, sizeof(addr), "http://%s", WiFi.softAPIP().toString().c_str());
+    server.on("/", HTTP_GET, []() { server.send_P(200, "text/html", kPage); });
+    server.on("/icon.png", HTTP_GET, []() {
+        server.sendHeader("Cache-Control", "max-age=86400");
+        server.send_P(200, "image/png", (const char *)web_icon_png, web_icon_png_size);
+    });
+    server.on("/api/state", HTTP_GET, handleState);
+    server.on("/api/cmd", HTTP_POST, handleCmd);
+    server.on("/api/answer", HTTP_POST, handleAnswer);
+    server.on("/api/settings", HTTP_POST, handleSettings);
+    server.on("/log.adi", HTTP_GET, handleLog);
+    server.on("/api/mode", HTTP_POST, handleMode);
+    server.on("/api/send", HTTP_POST, handleSend);
+    server.on("/api/fax", HTTP_GET, handleFaxList);
+    server.on("/fax", HTTP_GET, handleFax);
+    server.begin();
+    active = true;
+    Serial.printf("[web] access point %s, %s\n", kSsid, addr);
+}
+
+void stop()
+{
+    server.stop();
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+    active = false;
+    addr[0] = '\0';
+}
+
+}  // namespace
+
+void apply()
+{
+    if (settings.wifi_on && !active) {
+        start();
+    } else if (!settings.wifi_on && active) {
+        stop();
+    } else if (settings.wifi_on && active) {
+        // The password may have changed
+        stop();
+        start();
+    }
+}
+
+void loop()
+{
+    if (active) {
+        server.handleClient();
+    }
+}
+
+bool running()
+{
+    return active;
+}
+
+const char *address()
+{
+    return addr;
+}
+
+}  // namespace web
