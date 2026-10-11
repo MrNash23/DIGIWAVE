@@ -51,6 +51,7 @@ void openMode(Mode m);
 void openLog();
 void openSetup();
 void openBand();
+void modeWithFrequency(Mode m, char *out, size_t size);
 void powerDown(const char *reason);
 
 // --- widgets shared by the mode screens ------------------------------------------
@@ -426,9 +427,8 @@ void drawSlot()
     lv_bar_set_value(slot_header.slot, (int)(timebase::utcMs() % slot_ms) * 100 / slot_ms, LV_ANIM_OFF);
 
     // Mode and the frequency the logbook will record
-    char name[28], mhz[12];
-    ft8::formatMhz(settings.dialHz(st.mode == Mode::FT4), mhz);
-    snprintf(name, sizeof(name), "%s%s %s", engine::modeName(st.mode), settings.cb_mode ? " CB" : "", mhz);
+    char name[28];
+    modeWithFrequency(st.mode, name, sizeof(name));
     if (st.transmitting) {
         // The message needs the room, so the frequency is left out while sending
         lv_label_set_text_fmt(slot_header.state, "%s%s TX  %s", engine::modeName(st.mode), settings.cb_mode ? " CB" : "", st.tx_text);
@@ -629,31 +629,33 @@ void drawText()
     bool can_send = engine::canSendText(st.mode);
 
     const char *lock = st.locked ? "signal" : "no signal";
+    char name[28];
+    modeWithFrequency(st.mode, name, sizeof(name));
     switch (st.mode) {
     case Mode::CW:
         if (st.transmitting) {
-            lv_label_set_text_fmt(text_header.state, "CW TX  %d WPM  %d Hz", settings.cw_wpm, settings.cw_tone);
+            lv_label_set_text_fmt(text_header.state, "%s TX  %d WPM  %d Hz", name, settings.cw_wpm, settings.cw_tone);
         } else {
-            lv_label_set_text_fmt(text_header.state, "CW RX  %d WPM  %d Hz  %s", st.wpm, st.tune_hz, lock);
+            lv_label_set_text_fmt(text_header.state, "%s RX  %d WPM  %d Hz  %s", name, st.wpm, st.tune_hz, lock);
         }
         if (cw_wheel_sets_speed) {
-            lv_label_set_text_fmt(text_footer, "wheel: sending speed %d WPM   press: wheel moves the window   Enter: send   Backspace: menu",
+            lv_label_set_text_fmt(text_footer, "wheel: sending speed %d WPM   press: window   Enter: send, on an empty line: band   Backspace: menu",
                                   settings.cw_wpm);
         } else {
-            lv_label_set_text_fmt(text_footer, "wheel: window %d Hz - put the signal between the lines   press: speed   Enter: send",
+            lv_label_set_text_fmt(text_footer, "wheel: window %d Hz (signal between the marks)   press: speed   Enter: send, empty: band",
                                   settings.cw_tone);
         }
         break;
     case Mode::RTTY:
-        lv_label_set_text_fmt(text_header.state, "RTTY %s  %s Bd  %d/%d Hz%s  %s", st.transmitting ? "TX" : "RX",
+        lv_label_set_text_fmt(text_header.state, "%s %s  %s Bd  %d/%d%s  %s", name, st.transmitting ? "TX" : "RX",
                               settings.rtty_50_baud ? "50" : "45", settings.rtty_mark, settings.rtty_mark + settings.rtty_shift,
                               st.option ? " rev" : "", st.transmitting ? "" : lock);
-        lv_label_set_text(text_footer, "Enter: send   wheel: tune   press: reverse   Backspace on empty line: menu");
+        lv_label_set_text(text_footer, "Enter: send, on an empty line: band   wheel: tune   press: reverse   Backspace on empty line: menu");
         break;
     default:
-        lv_label_set_text_fmt(text_header.state, "NAVTEX RX  centre %d Hz%s  %s", settings.navtex_center, st.option ? " rev" : "",
+        lv_label_set_text_fmt(text_header.state, "%s kHz  centre %d Hz%s  %s", name, settings.navtex_center, st.option ? " rev" : "",
                               st.locked ? "in step" : "searching");
-        lv_label_set_text(text_footer, "wheel: tune   press: reverse   Backspace: menu");
+        lv_label_set_text(text_footer, "wheel: tune   press: reverse   B: stations   Backspace: menu");
         break;
     }
     lv_obj_set_style_text_color(text_header.state, st.transmitting ? kColTx : kColText, 0);
@@ -757,7 +759,12 @@ void textKey(char c)
         if (can_send && n > 0) {
             submitText(input);
             input[0] = '\0';
+        } else if (!engine::status().transmitting) {
+            // Letters are text to send here, so Enter on an empty line opens the frequencies
+            openBand();
         }
+    } else if (!can_send && tolower((unsigned char)c) == 'b') {
+        openBand();
     } else if (can_send && isprint((unsigned char)c) && n + 1 < sizeof(input)) {
         input[n] = (char)toupper((unsigned char)c);
         input[n + 1] = '\0';
@@ -944,18 +951,20 @@ void drawFax()
 {
     engine::Status st = engine::status();
     drawHeader(fax_header, st);
+    char name[28];
+    modeWithFrequency(Mode::WEFAX, name, sizeof(name));
     if (fax_saving) {
-        lv_label_set_text_fmt(fax_header.state, "WEFAX  saving, %u lines", (unsigned)fax_lines_saved);
+        lv_label_set_text_fmt(fax_header.state, "%s kHz  saving, %u lines", name, (unsigned)fax_lines_saved);
         lv_obj_set_style_text_color(fax_header.state, kColCq, 0);
     } else {
-        lv_label_set_text_fmt(fax_header.state, "WEFAX  120 LPM  %s", fax_auto ? "waiting for start tone" : "manual");
+        lv_label_set_text_fmt(fax_header.state, "%s kHz  120 LPM  %s", name, fax_auto ? "waiting for start" : "manual");
         lv_obj_set_style_text_color(fax_header.state, kColText, 0);
     }
     if (noticeActive()) {
         lv_label_set_text(fax_footer, notice);
         lv_obj_set_style_text_color(fax_footer, kColWarn, 0);
     } else {
-        lv_label_set_text_fmt(fax_footer, "Enter: %s saving   A: auto %s   wheel: move picture   press: align again   Backspace: menu",
+        lv_label_set_text_fmt(fax_footer, "Enter: %s saving   A: auto %s   B: stations   wheel: move   press: align   Backspace: menu",
                               fax_saving ? "stop" : "start", fax_auto ? "on" : "off");
         lv_obj_set_style_text_color(fax_footer, kColDim, 0);
     }
@@ -970,6 +979,9 @@ void faxKey(char c)
         break;
     case 'a':
         fax_auto = !fax_auto;
+        break;
+    case 'b':
+        openBand();
         break;
     case 0x08:
         openHome();
@@ -1225,10 +1237,9 @@ const lv_image_dsc_t *const kTileIcons[] = {
 constexpr int kTiles = sizeof(kTileIcons) / sizeof(kTileIcons[0]);
 constexpr int kTileLog = engine::kModes, kTileSetup = kTileLog + 1, kTileWifi = kTileLog + 2;
 constexpr int kTileSize = 86;  // TILE in tools/make_assets.py
-const lv_color_t kColSelected = lv_color_hex(0xFF2030);
 
 lv_obj_t *scr_home;
-lv_obj_t *tile_box[kTiles];
+lv_obj_t *tile_tint;
 lv_obj_t *home_time, *home_info, *home_gps, *home_wifi, *home_sd, *home_battery;
 int tile_selected = 0;
 
@@ -1249,14 +1260,14 @@ void buildHome()
     for (int i = 0; i < kTiles; ++i) {
         int x = 9 + (i % cols) * pitch_x;
         int y = 38 + (i / cols) * pitch_y;
-        // A frame around the picture marks the selected tile
-        tile_box[i] = makeBox(scr_home, x - 3, y - 3, kTileSize + 6, kTileSize + 6, kColBg);
-        lv_obj_set_style_radius(tile_box[i], 6, 0);
-        lv_obj_set_style_border_width(tile_box[i], 3, 0);
         lv_obj_t *icon = lv_image_create(scr_home);
         lv_image_set_src(icon, kTileIcons[i]);
         lv_obj_set_pos(icon, x, y);
     }
+    // The selected tile is coloured: a veil in the magenta of the artwork lies over it
+    tile_tint = makeBox(scr_home, 0, 0, kTileSize, kTileSize, kColToMe);
+    lv_obj_set_style_bg_opa(tile_tint, LV_OPA_40, 0);
+    lv_obj_set_style_radius(tile_tint, 5, 0);
 }
 
 void drawHome()
@@ -1271,9 +1282,8 @@ void drawHome()
         battery = (int)instance.gauge.getStateOfCharge();
     }
 
-    for (int i = 0; i < kTiles; ++i) {
-        lv_obj_set_style_border_color(tile_box[i], i == tile_selected ? kColSelected : kColBg, 0);
-    }
+    const int cols = 5, pitch_x = 94, pitch_y = 92;
+    lv_obj_set_pos(tile_tint, 9 + (tile_selected % cols) * pitch_x, 38 + (tile_selected / cols) * pitch_y);
 
     uint32_t secs = (uint32_t)(timebase::utcMs() / 1000);
     lv_label_set_text_fmt(home_time, "%02u:%02u:%02u", (unsigned)(secs / 3600 % 24), (unsigned)(secs / 60 % 60), (unsigned)(secs % 60));
@@ -1398,21 +1408,36 @@ void openLog()
     lv_screen_load(scr_log);
 }
 
-// --- band and frequency for the logbook ---------------------------------------------------
+// --- frequency of the radio ---------------------------------------------------------------
 
-// The radio is tuned by hand; here the user tells which frequency it is on.
+// The radio is tuned by hand; here the user tells which frequency it is on. For
+// FT8 and FT4 it goes into the logbook, in the other modes it is shown, and for
+// the broadcast modes the list is a reminder of where the stations are.
 constexpr int kBandRows = 9;
 constexpr int kMaxBandEntries = 16;
 lv_obj_t *scr_band, *band_title, *band_bg[kBandRows], *band_row[kBandRows], *band_footer;
-uint32_t band_hz[kMaxBandEntries];
 const ft8::BandPreset *band_preset[kMaxBandEntries];
 int band_entries = 0;   // presets for the mode in use; one more row follows for another frequency
 int band_selected = 0;
 char band_other[10] = "";  // kHz as typed, for example "14074" or "7047.5"
 
-bool bandForFt4()
+/// Stations are listed by their frequency; the radio in USB is tuned lower by
+/// the audio frequency their signal is to appear at. 0 for the other modes.
+int bandTuneOffsetHz(Mode m)
 {
-    return engine::mode() == Mode::FT4;
+    return m == Mode::NAVTEX ? settings.navtex_center : (m == Mode::WEFAX ? 1900 : 0);
+}
+
+/// Mode with frequency, for the headers: "CW 7.030", "NAVTEX 518".
+void modeWithFrequency(Mode m, char *out, size_t size)
+{
+    char f[12];
+    if (m == Mode::NAVTEX || m == Mode::WEFAX) {
+        ft8::formatKhz(settings.dialHz((int)m), f);
+    } else {
+        ft8::formatMhz(settings.dialHz((int)m), f);
+    }
+    snprintf(out, size, "%s%s %s", engine::modeName(m), settings.cb_mode && engine::isSlotMode(m) ? " CB" : "", f);
 }
 
 void buildBand()
@@ -1429,9 +1454,11 @@ void buildBand()
 
 void drawBand()
 {
-    uint32_t current = settings.dialHz(bandForFt4());
-    lv_label_set_text_fmt(band_title, "Frequency of the radio, for the logbook  -  %s%s", engine::modeName(engine::mode()),
-                          settings.cb_mode ? " CB" : "");
+    Mode m = engine::mode();
+    uint32_t current = settings.dialHz((int)m);
+    int offset = bandTuneOffsetHz(m);
+    lv_label_set_text_fmt(band_title, "%s  -  %s%s", offset ? "Station (tune the radio as shown, USB)" : "Frequency of the radio",
+                          engine::modeName(m), settings.cb_mode && engine::isSlotMode(m) ? " CB" : "");
     int rows = band_entries + 1;
     int top = constrain(band_selected - kBandRows / 2, 0, max(0, rows - kBandRows));
     for (int i = 0; i < kBandRows; ++i) {
@@ -1442,13 +1469,21 @@ void drawBand()
             continue;
         }
         if (idx < band_entries) {
-            char mhz[12];
-            ft8::formatMhz(band_hz[idx], mhz);
-            const char *remark = band_preset[idx]->remark;
-            lv_label_set_text_fmt(band_row[i], "%-6s  %s MHz%s%s%s%s", band_preset[idx]->band, mhz, remark[0] ? "  (" : "", remark,
-                                  remark[0] ? ")" : "", band_hz[idx] == current ? "    - in use" : "");
+            const ft8::BandPreset &p = *band_preset[idx];
+            char f[12], tune[28] = "";
+            if (offset != 0) {
+                // Stations in kHz, with the dial setting that brings them to the right audio frequency
+                char dial[12];
+                ft8::formatKhz(p.hz, f);
+                ft8::formatKhz(p.hz - (uint32_t)offset, dial);
+                snprintf(tune, sizeof(tune), "  ->  dial %s", dial);
+            } else {
+                ft8::formatMhz(p.hz, f);
+            }
+            lv_label_set_text_fmt(band_row[i], "%-13s %s %s%s%s%s%s%s", p.label, f, offset ? "kHz" : "MHz", tune, p.remark[0] ? "  (" : "",
+                                  p.remark, p.remark[0] ? ")" : "", p.hz == current ? "    - in use" : "");
         } else {
-            lv_label_set_text_fmt(band_row[i], "Other:  %s%s kHz   (type the dial frequency)", band_other, idx == band_selected ? "_" : "");
+            lv_label_set_text_fmt(band_row[i], "Other:  %s%s kHz   (type the frequency)", band_other, idx == band_selected ? "_" : "");
         }
         lv_obj_set_style_bg_color(band_bg[i], idx == band_selected ? kColSel : kColBg, 0);
     }
@@ -1459,31 +1494,24 @@ void drawBand()
 
 void openBand()
 {
-    bool ft4 = bandForFt4();
-    uint32_t current = settings.dialHz(ft4);
+    Mode m = engine::mode();
+    ft8::BandUse use = (ft8::BandUse)(int)m;
+    bool cb = settings.cb_mode && engine::isSlotMode(m);
+    uint32_t current = settings.dialHz((int)m);
     band_entries = 0;
     band_selected = -1;
-    for (int i = 0; i < ft8::bandPresetCount(settings.cb_mode) && band_entries < kMaxBandEntries; ++i) {
-        const ft8::BandPreset &p = ft8::bandPreset(settings.cb_mode, i);
-        uint32_t hz = ft4 ? p.ft4_hz : p.ft8_hz;
-        if (hz == 0) {
-            continue;
-        }
-        if (hz == current) {
+    for (int i = 0; i < ft8::bandPresetCount(use, cb) && band_entries < kMaxBandEntries; ++i) {
+        const ft8::BandPreset &p = ft8::bandPreset(use, cb, i);
+        if (p.hz == current) {
             band_selected = band_entries;
         }
-        band_hz[band_entries] = hz;
         band_preset[band_entries++] = &p;
     }
     // A frequency that is none of the usual ones is shown in the row for typing
     band_other[0] = '\0';
     if (band_selected < 0) {
         band_selected = band_entries;
-        if (current % 1000 == 0) {
-            snprintf(band_other, sizeof(band_other), "%u", (unsigned)(current / 1000));
-        } else {
-            snprintf(band_other, sizeof(band_other), "%u.%u", (unsigned)(current / 1000), (unsigned)(current / 100 % 10));
-        }
+        ft8::formatKhz(current, band_other);
     }
     screen = Screen::Band;
     drawBand();
@@ -1493,11 +1521,11 @@ void openBand()
 void closeBand(bool take)
 {
     if (take) {
-        uint32_t hz = band_selected < band_entries ? band_hz[band_selected] : (uint32_t)(atof(band_other) * 1000 + 0.5);
+        uint32_t hz = band_selected < band_entries ? band_preset[band_selected]->hz : (uint32_t)(atof(band_other) * 1000 + 0.5);
         if (hz < 100000 || hz > 450000000u) {
             showNotice("Not a frequency in kHz - nothing changed");
         } else {
-            settings.dialHz(bandForFt4()) = hz;
+            settings.dialHz((int)engine::mode()) = hz;
             settings.save();
         }
     }

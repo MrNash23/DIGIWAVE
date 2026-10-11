@@ -498,25 +498,36 @@ static void test_qso_window()
 
 static void test_band_plan()
 {
-    TEST_ASSERT_EQUAL(12, bandPresetCount(false));
-    TEST_ASSERT_EQUAL(1, bandPresetCount(true));
-    TEST_ASSERT_EQUAL_UINT32(27265000, bandPreset(true, 0).ft8_hz);
-    // Every preset lies in the band it is named after, and FT4 has no place on 160 m and 60 m
-    int without_ft4 = 0;
-    for (int i = 0; i < bandPresetCount(false); ++i) {
-        const BandPreset &p = bandPreset(false, i);
-        const char *name = bandName(p.ft8_hz / 1000);
-        TEST_ASSERT_NOT_NULL(name);
-        char spaced[8];
-        snprintf(spaced, sizeof(spaced), "%.*s m", (int)strlen(name) - 1, name);
-        TEST_ASSERT_EQUAL_STRING(p.band, spaced);
-        if (p.ft4_hz == 0) {
-            ++without_ft4;
-        } else {
-            TEST_ASSERT_EQUAL_STRING(name, bandName(p.ft4_hz / 1000));
+    TEST_ASSERT_EQUAL(12, bandPresetCount(BandUse::FT8, false));
+    TEST_ASSERT_EQUAL(10, bandPresetCount(BandUse::FT4, false));
+    TEST_ASSERT_EQUAL(1, bandPresetCount(BandUse::FT8, true));
+    TEST_ASSERT_EQUAL_UINT32(27265000, bandPreset(BandUse::FT4, true, 0).hz);
+    // CB operation only concerns FT8 and FT4
+    TEST_ASSERT_EQUAL(bandPresetCount(BandUse::CW, false), bandPresetCount(BandUse::CW, true));
+
+    // Every amateur frequency lies in the band it is named after
+    for (BandUse use : {BandUse::FT8, BandUse::FT4, BandUse::CW, BandUse::RTTY}) {
+        for (int i = 0; i < bandPresetCount(use, false); ++i) {
+            const BandPreset &p = bandPreset(use, false, i);
+            if (strstr(p.label, " m") == nullptr) {
+                continue;  // a station, not a band
+            }
+            const char *name = bandName(p.hz / 1000);
+            TEST_ASSERT_NOT_NULL_MESSAGE(name, p.label);
+            char spaced[8];
+            snprintf(spaced, sizeof(spaced), "%.*s m", (int)strlen(name) - 1, name);
+            TEST_ASSERT_EQUAL_STRING(p.label, spaced);
         }
     }
-    TEST_ASSERT_EQUAL(2, without_ft4);
+    // Every list has entries, and none of them an empty frequency
+    for (BandUse use : {BandUse::FT8, BandUse::FT4, BandUse::CW, BandUse::RTTY, BandUse::NAVTEX, BandUse::WEFAX}) {
+        TEST_ASSERT_GREATER_THAN(0, bandPresetCount(use, false));
+        for (int i = 0; i < bandPresetCount(use, false); ++i) {
+            TEST_ASSERT_GREATER_THAN_UINT32(100000, bandPreset(use, false, i).hz);
+        }
+    }
+    TEST_ASSERT_EQUAL_UINT32(518000, bandPreset(BandUse::NAVTEX, false, 0).hz);
+
     char text[12];
     formatMhz(14074000, text);
     TEST_ASSERT_EQUAL_STRING("14.074", text);
@@ -524,6 +535,10 @@ static void test_band_plan()
     TEST_ASSERT_EQUAL_STRING("7.0475", text);
     formatMhz(144174000, text);
     TEST_ASSERT_EQUAL_STRING("144.174", text);
+    formatKhz(518000, text);
+    TEST_ASSERT_EQUAL_STRING("518", text);
+    formatKhz(13882500, text);
+    TEST_ASSERT_EQUAL_STRING("13882.5", text);
 }
 
 static void test_adif_field()

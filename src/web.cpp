@@ -220,7 +220,7 @@ void handleState()
     appendJsonString(out, settings.grid);
     // The frequency of the mode in use, in kHz
     snprintf(buf, sizeof(buf), ",\"gridauto\":%s,\"dial\":%.1f,\"txhz\":%d,\"qsos\":%d,\"hist\":[",
-             settings.grid_auto ? "true" : "false", settings.dialHz(engine::mode() == engine::Mode::FT4) / 1000.0, settings.tx_hz,
+             settings.grid_auto ? "true" : "false", settings.dialHz((int)engine::mode()) / 1000.0, settings.tx_hz,
              logbook::total());
     out += buf;
     for (int i = 0; i < n; ++i) {
@@ -345,7 +345,7 @@ void handleSettings()
         strncpy(settings.grid, grid.c_str(), sizeof(settings.grid) - 1);
     }
     settings.grid_auto = grid_auto;
-    settings.dialHz(engine::mode() == engine::Mode::FT4) = (uint32_t)(constrain(server.arg("dial").toDouble(), 0.0, 450000.0) * 1000 + 0.5);
+    settings.dialHz((int)engine::mode()) = (uint32_t)(constrain(server.arg("dial").toDouble(), 0.0, 450000.0) * 1000 + 0.5);
     settings.tx_hz = constrain((int)server.arg("txhz").toInt(), 300, 2800);
     settings.save();
     engine::applySettings();

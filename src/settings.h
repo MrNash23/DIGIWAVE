@@ -13,9 +13,23 @@ struct Settings {
     uint32_t dial_ft4_hz = 14080000;
     uint32_t dial_cb_ft8_hz = 27265000;
     uint32_t dial_cb_ft4_hz = 27265000;
+    uint32_t dial_cw_hz = 7030000;
+    uint32_t dial_rtty_hz = 14085000;
+    uint32_t dial_navtex_hz = 518000;   // of the station; the radio is tuned lower by the audio centre
+    uint32_t dial_wefax_hz = 7880000;   // of the station; the radio is tuned 1.9 kHz lower
 
-    /// The frequency that applies to FT8 or FT4 in the current kind of operation.
-    uint32_t &dialHz(bool ft4) { return cb_mode ? (ft4 ? dial_cb_ft4_hz : dial_cb_ft8_hz) : (ft4 ? dial_ft4_hz : dial_ft8_hz); }
+    /// The frequency that applies to a mode (0..5, see engine::Mode) in the current kind of operation.
+    uint32_t &dialHz(int mode)
+    {
+        switch (mode) {
+        case 0: return cb_mode ? dial_cb_ft8_hz : dial_ft8_hz;
+        case 1: return cb_mode ? dial_cb_ft4_hz : dial_ft4_hz;
+        case 2: return dial_cw_hz;
+        case 3: return dial_rtty_hz;
+        case 4: return dial_navtex_hz;
+        default: return dial_wefax_hz;
+        }
+    }
     int tx_hz = 1500;           // audio frequency of the lowest tone
     int tx_level = 50;          // percent of full scale
     int volume = 80;            // codec output volume, percent
