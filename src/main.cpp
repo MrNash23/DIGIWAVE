@@ -21,6 +21,10 @@ void setup()
     // NO_INIT_FATFS: the library otherwise waits forever for a FAT partition in flash.
     uint32_t probe = instance.begin(NO_HW_LORA | NO_HW_NFC | NO_HW_SENSOR | NO_INIT_FATFS);
     Serial.printf("[dw] board up, devices 0x%06x\n", (unsigned)probe);
+    // The library switches everything on; the NFC chip and the LoRa radio only
+    // draw current here. The speaker amplifier is switched by the audio driver.
+    instance.io.digitalWrite(EXPANDS_NFC_EN, LOW);
+    instance.io.digitalWrite(EXPANDS_LORA_EN, LOW);
     beginLvglHelper(instance);
     instance.setBrightness(DEVICE_MAX_BRIGHTNESS_LEVEL);
     ui::splash();

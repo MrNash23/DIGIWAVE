@@ -225,9 +225,11 @@ void drawWaterfall(Waterfall *wf)
         }
         wf_floor = 0.9f * wf_floor + 0.1f * level;
 
+        // The newest row is the top one and the picture runs downwards, as in WSJT-X.
+        // The marks for tuning sit above the strip and so point at what is heard right now.
         uint32_t stride = wf->buf->header.stride;
-        memmove(wf->buf->data, wf->buf->data + stride, stride * (wf->height - 1));
-        uint16_t *line = (uint16_t *)(wf->buf->data + stride * (wf->height - 1));
+        memmove(wf->buf->data + stride, wf->buf->data, stride * (wf->height - 1));
+        uint16_t *line = (uint16_t *)wf->buf->data;
         for (int x = 0; x < engine::kWaterfallBins; ++x) {
             int idx = (int)((row[x] - wf_floor + 6) * 6);  // red at about 18 dB above the noise
             line[x] = palette[constrain(idx, 0, 255)];
@@ -599,9 +601,9 @@ void slotKey(char c)
 // --- CW, RTTY, NAVTEX screen ---------------------------------------------------------
 
 constexpr int kTextY = 20;
-constexpr int kTextWfY = 200;       // spectrum strip
-constexpr int kTextWfHeight = 20;
-constexpr int kMarkY = 191;         // band above it for the tuning marks
+constexpr int kTextWfY = 182;       // spectrum strip, down to the bottom of the screen
+constexpr int kTextWfHeight = 40;
+constexpr int kMarkY = 173;         // band above it for the tuning marks
 
 lv_obj_t *scr_text;
 Header text_header;
@@ -655,7 +657,7 @@ void buildText()
 {
     scr_text = makeScreen();
     text_header = makeHeader(scr_text, false);
-    text_box = makeBox(scr_text, 0, kTextY, kWidth, 148, kColBg);
+    text_box = makeBox(scr_text, 0, kTextY, kWidth, 130, kColBg);
     text_label = lv_label_create(text_box);
     lv_obj_set_width(text_label, kWidth - 8);
     lv_label_set_long_mode(text_label, LV_LABEL_LONG_WRAP);
@@ -665,7 +667,7 @@ void buildText()
     // The newest text stays visible: the label grows upwards out of the box
     lv_obj_align(text_label, LV_ALIGN_BOTTOM_LEFT, 4, 0);
 
-    input_label = makeLabel(scr_text, 4, 170, kWidth - 8, &lv_font_montserrat_14, kColCq);
+    input_label = makeLabel(scr_text, 4, 152, kWidth - 8, &lv_font_montserrat_14, kColCq);
     text_wf = makeWaterfall(scr_text, kTextWfY, kTextWfHeight);
     // The tuning marks sit above the spectrum, not in it
     buildTriangle();
@@ -741,7 +743,7 @@ void drawText()
     }
 
     // NAVTEX only receives: the input line makes room for text
-    lv_obj_set_height(text_box, can_send ? 148 : 168);
+    lv_obj_set_height(text_box, can_send ? 130 : 150);
     if (can_send) {
         lv_obj_remove_flag(input_label, LV_OBJ_FLAG_HIDDEN);
         if (input[0] == '\0') {
