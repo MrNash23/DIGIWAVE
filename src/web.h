@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andres Leroi
 #pragma once
 
 /// Wi-Fi access point with a small web interface for a phone: decodes, the main

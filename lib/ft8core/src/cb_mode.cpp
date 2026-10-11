@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andres Leroi
 #include "cb_mode.h"
 
 #include <ctype.h>
@@ -13,8 +15,9 @@ struct Division {
     const char *country;
 };
 
-// International 11 m DX division numbers, as used by WSJT-CB
-// (github.com/vash909/WSJT-CB, logbook/AD1CCty.cpp). Sorted by number.
+// International 11 m DX division numbers, taken from WSJT-CB
+// (github.com/vash909/WSJT-CB, logbook/AD1CCty.cpp), which like WSJT-X is
+// licensed under the GPL version 3. Sorted by number.
 const Division kDivisions[] = {
     {1, "Italy"}, {2, "U.S.A."}, {3, "Brazil"}, {4, "Argentina"}, {5, "Venezuela"}, {6, "Colombia"}, {8, "Peru"},
     {9, "Canada"}, {10, "Mexico"}, {11, "Puerto Rico"}, {12, "Uruguay"}, {13, "Germany"}, {14, "France"},

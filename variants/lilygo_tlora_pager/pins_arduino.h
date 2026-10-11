@@ -91,7 +91,8 @@ static const uint8_t SCK = 35;
 #define USING_BQ_GAUGE
 #define USING_INPUT_DEV_ROTARY
 #define USING_INPUT_DEV_KEYBOARD
-#define USING_ST25R3916
+// NFC is not used by this firmware; without this the reader code of ST (under its own licence) stays out of the build
+// #define USING_ST25R3916
 #define USING_BHI260_SENSOR
 #define HAS_SD_CARD_SOCKET
 

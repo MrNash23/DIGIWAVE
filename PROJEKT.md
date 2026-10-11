@@ -87,4 +87,9 @@ Meshtastic) und wird über den Launcher von bmorcelli gestartet.
 
 - Zusatzplatine für den 12-Pin-Anschluss mit Line-In, Line-Out und PTT
 - CW-Tastleitung, Logbuch auch für CW- und RTTY-Verbindungen
-- Lizenzdatei für das Repository
+
+## Lizenz
+
+Copyright (C) 2026 Andres Leroi. DIGIWAVE steht unter der GNU General Public License, Version 3 oder später
+(`LICENSE`). Die verwendeten Bibliotheken und Daten mit Urhebern und Lizenzen
+stehen in `THIRD-PARTY-NOTICES.md` und am Gerät unter Setup, „About DIGIWAVE".

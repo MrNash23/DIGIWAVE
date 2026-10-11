@@ -138,8 +138,27 @@ the phone page.
 - `test` - host tests and reference recordings from ft8_lib
 - `PROJEKT.md` - description of the project in German
 
-## Sources
+## Licence and credits
 
-- FT8/FT4 coding: ft8_lib by Karlis Goba (MIT)
-- Board support: LilyGoLib by LilyGo (MIT)
-- CB division list and message sequence: [WSJT-CB](https://github.com/vash909/WSJT-CB)
+Copyright (C) 2026 Andres Leroi
+
+DIGIWAVE is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. It comes without any warranty. The text is in [`LICENSE`](LICENSE).
+
+It stands on the work of others:
+
+- **FT8 and FT4** are protocols by Joe Taylor K1JT and Steve Franke K9AN;
+  coding and decoding come from [ft8_lib](https://github.com/kgoba/ft8_lib) by
+  Kārlis Goba (MIT)
+- **CB operation** follows [WSJT-CB](https://github.com/vash909/WSJT-CB), from
+  which the list of 11 m divisions is taken (GPL-3.0)
+- **The device** is driven through [LilyGoLib](https://github.com/Xinyuan-LilyGO/LilyGoLib)
+  (MIT), the display through [LVGL](https://github.com/lvgl/lvgl) (MIT) with
+  the Montserrat typeface (SIL Open Font License)
+- **The platform** is the Arduino core for ESP32 (LGPL-2.1) on ESP-IDF (Apache-2.0)
+
+The complete list with versions, authors and licences is in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The same credits are shown
+on the device under Setup, "About DIGIWAVE".

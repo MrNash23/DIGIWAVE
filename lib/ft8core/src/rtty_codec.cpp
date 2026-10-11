@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andres Leroi
 #include "rtty_codec.h"
 
 #include <ctype.h>

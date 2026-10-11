@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andres Leroi
 #include "ui.h"
 
 #include <LilyGoLib.h>
@@ -44,7 +46,7 @@ const lv_color_t kColWarn = lv_color_hex(0xE0A020);
 const lv_color_t kColAccent = lv_color_hex(0x3766FF);
 const lv_color_t kColFrame = lv_color_hex(0x202D7A);
 
-enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, Band, FaxList, FaxView };
+enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, About, Band, FaxList, FaxView };
 Screen screen = Screen::Home;
 
 void openHome();
@@ -53,6 +55,7 @@ void openLog();
 void openSetup();
 bool sub_from_app = false;  // a page opened from a mode returns to it, not to the menu
 void openBand();
+void openAbout();
 void openFaxList();
 void openOverlay();
 void drawNoticeBar();
@@ -160,8 +163,8 @@ Header makeHeader(lv_obj_t *scr, bool with_slot)
     h.gps = makeIcon(scr, 78, 1, &img_status_gps_no_fix);
     h.txrx = makeIcon(scr, 100, 1, &img_status_rx);
     if (with_slot) {
-        h.slot = makeBar(scr, 122, 5, 70, 8, kColAccent);
-        h.state = makeLabel(scr, 200, 1, 208, &lv_font_montserrat_14, kColText);
+        h.slot = makeBar(scr, 122, 5, 40, 8, kColAccent);
+        h.state = makeLabel(scr, 168, 1, 242, &lv_font_montserrat_14, kColText);
     } else {
         h.state = makeLabel(scr, 124, 1, 284, &lv_font_montserrat_14, kColText);
     }
@@ -391,16 +394,15 @@ void drawList()
         lv_label_set_text_fmt(row_meta[i], "%02u%02u%02u  %+03d  %4d", (unsigned)(t / 3600 % 24), (unsigned)(t / 60 % 60),
                               (unsigned)(t % 60), e.msg.snr, (int)e.msg.freq);
         lv_label_set_text(row_msg[i], e.msg.text);
-        // Locator, distance from the own one, country
+        // Distance from the own locator and country. The locator itself is left out:
+        // where a station sends it, it stands in the message already.
         char where[20] = "";
         int km = ft8::gridDistanceKm(settings.grid, e.grid);
         if (km >= 0) {
-            snprintf(where, sizeof(where), "%s %d km", e.grid, km);
-        } else {
-            snprintf(where, sizeof(where), "%s", e.grid);
+            snprintf(where, sizeof(where), "%d km", km);
         }
         if (e.country[0] != '\0') {
-            lv_label_set_text_fmt(row_info[i], "%s%s(%s)", where, where[0] ? " " : "", e.country);
+            lv_label_set_text_fmt(row_info[i], "%s%s%.15s", where, where[0] ? "  " : "", e.country);
         } else {
             lv_label_set_text(row_info[i], where);
         }
@@ -462,13 +464,13 @@ void drawSlot()
     modeWithFrequency(st.mode, name, sizeof(name));
     if (st.transmitting) {
         // The message needs the room, so the frequency is left out while sending
-        lv_label_set_text_fmt(slot_header.state, "%s%s TX  %s", engine::modeName(st.mode), settings.cb_mode ? " CB" : "", st.tx_text);
+        lv_label_set_text_fmt(slot_header.state, "%s%s TX %s", engine::modeName(st.mode), settings.cb_mode ? " CB" : "", st.tx_text);
         lv_obj_set_style_text_color(slot_header.state, kColTx, 0);
     } else {
         if (st.dx_call[0] != '\0' && strcmp(st.qso_state, "Idle") != 0) {
-            lv_label_set_text_fmt(slot_header.state, "%s RX  %s %s", name, st.qso_state, st.dx_call);
+            lv_label_set_text_fmt(slot_header.state, "%s RX %s %s", name, st.qso_state, st.dx_call);
         } else {
-            lv_label_set_text_fmt(slot_header.state, "%s RX  %s", name, st.qso_state);
+            lv_label_set_text_fmt(slot_header.state, "%s RX %s", name, st.qso_state);
         }
         lv_obj_set_style_text_color(slot_header.state, kColText, 0);
     }
@@ -478,7 +480,7 @@ void drawSlot()
         lv_label_set_text(slot_footer, notice);
         lv_obj_set_style_text_color(slot_footer, kColWarn, 0);
     } else {
-        lv_label_set_text_fmt(slot_footer, "Enter: call   TX %s (T)   CQ (C)   Halt (H)   View (V): %s   Band (B)   |  %d dec",
+        lv_label_set_text_fmt(slot_footer, "Enter: call  T: TX %s  C: CQ  H: halt  V: %s  B: band  |  %d dec",
                               st.tx_enabled ? "ON" : "off", list_view == ListView::Qso ? "QSO" : "all", st.decoded);
         lv_obj_set_style_text_color(slot_footer, st.tx_enabled ? kColTx : kColDim, 0);
     }
@@ -679,24 +681,24 @@ void drawText()
     drawHeader(text_header, st);
     bool can_send = engine::canSendText(st.mode);
 
-    const char *lock = st.locked ? "signal" : "no signal";
+    const char *lock = st.locked ? "signal" : "-";
     char name[28];
     modeWithFrequency(st.mode, name, sizeof(name));
     switch (st.mode) {
     case Mode::CW:
         if (st.transmitting) {
-            lv_label_set_text_fmt(text_header.state, "%s TX  %d WPM  %d Hz", name, settings.cw_wpm, settings.cw_tone);
+            lv_label_set_text_fmt(text_header.state, "%s TX %d WPM %d Hz", name, settings.cw_wpm, settings.cw_tone);
         } else {
-            lv_label_set_text_fmt(text_header.state, "%s RX  %d WPM  %d Hz  %s", name, st.wpm, st.tune_hz, lock);
+            lv_label_set_text_fmt(text_header.state, "%s RX %d WPM %d Hz %s", name, st.wpm, st.tune_hz, lock);
         }
         break;
     case Mode::RTTY:
-        lv_label_set_text_fmt(text_header.state, "%s %s  %s Bd  %d/%d%s  %s", name, st.transmitting ? "TX" : "RX",
+        lv_label_set_text_fmt(text_header.state, "%s %s %sBd %d/%d%s %s", name, st.transmitting ? "TX" : "RX",
                               settings.rtty_50_baud ? "50" : "45", settings.rtty_mark, settings.rtty_mark + settings.rtty_shift,
                               st.option ? " rev" : "", st.transmitting ? "" : lock);
         break;
     default:
-        lv_label_set_text_fmt(text_header.state, "%s kHz  centre %d Hz%s  %s", name, settings.navtex_center, st.option ? " rev" : "",
+        lv_label_set_text_fmt(text_header.state, "%s kHz %d Hz%s %s", name, settings.navtex_center, st.option ? " rev" : "",
                               st.locked ? "in step" : "searching");
         break;
     }
@@ -743,9 +745,11 @@ void drawText()
     if (can_send) {
         lv_obj_remove_flag(input_label, LV_OBJ_FLAG_HIDDEN);
         if (input[0] == '\0') {
-            lv_label_set_text(input_label, "> _      type and Enter to send   digits and symbols: hold Space + key");
+            lv_label_set_text(input_label, "> _     Enter sends   Space + key: digits, symbols");
         } else {
-            lv_label_set_text_fmt(input_label, "> %s_", input);
+            // A long line shows its end, where the typing happens
+            size_t n = strlen(input);
+            lv_label_set_text_fmt(input_label, "> %s%s_", n > 54 ? "..." : "", n > 54 ? input + n - 52 : input);
         }
     } else {
         lv_obj_add_flag(input_label, LV_OBJ_FLAG_HIDDEN);
@@ -1022,8 +1026,8 @@ void drawFax()
     // How much of the picture is in memory, and whether a file holds it already
     uint32_t lines = faxPictureLines();
     bool unsaved = fax_total > fax_saved_to;
-    lv_label_set_text_fmt(fax_header.state, "%s kHz  %u lines%s%s", name, (unsigned)lines,
-                          fax_hold ? "  PAUSED" : "", lines >= 20 && unsaved ? (fax_auto ? "  auto save" : "  not saved") : "");
+    lv_label_set_text_fmt(fax_header.state, "%s kHz %u lines %s", name, (unsigned)lines,
+                          fax_hold ? "PAUSED" : (lines >= 20 && unsaved ? (fax_auto ? "auto save" : "not saved") : ""));
     lv_obj_set_style_text_color(fax_header.state, fax_hold ? kColWarn : kColText, 0);
 }
 
@@ -1276,9 +1280,9 @@ void drawSstv()
     char name[28];
     modeWithFrequency(Mode::SSTV, name, sizeof(name));
     if (state.receiving) {
-        lv_label_set_text_fmt(sstv_header.state, "%s  %s  line %d of %d", name, state.format, state.line, state.lines);
+        lv_label_set_text_fmt(sstv_header.state, "%s %s %d/%d", name, state.format, state.line, state.lines);
     } else {
-        lv_label_set_text_fmt(sstv_header.state, "%s  waiting for a picture", name);
+        lv_label_set_text_fmt(sstv_header.state, "%s waiting for a picture", name);
     }
     lv_obj_set_style_text_color(sstv_header.state, state.receiving ? kColCq : kColText, 0);
     lv_label_set_text_fmt(sstv_left, "%s\n%d lines\n\n%s\n\n%s", sstv_have ? sstv_format : "no picture", sstv_have,
@@ -1460,7 +1464,7 @@ Field fields[] = {
     {"FT8/FT4 TX frequency", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_hz, 300, 2800, 50, " Hz", nullptr, "", ""},
     {"FT8/FT4 max repeats", Kind::Number, nullptr, 0, Chars::Call, &settings.max_retries, 1, 20, 1, "", nullptr, "", ""},
     {"CW sending speed", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_wpm, 5, 40, 1, " WPM", nullptr, "", ""},
-    {"CW frequency (RX window, TX)", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_tone, 400, 1200, 10, " Hz", nullptr, "", ""},
+    {"CW tone (RX window, TX)", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_tone, 400, 1200, 10, " Hz", nullptr, "", ""},
     {"RTTY speed", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.rtty_50_baud, "50 baud", "45.45 baud"},
     {"RTTY shift", Kind::Number, nullptr, 0, Chars::Call, &settings.rtty_shift, 85, 850, 5, " Hz", nullptr, "", ""},
     {"TX level", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_level, 5, 100, 5, " %", nullptr, "", ""},
@@ -1471,6 +1475,7 @@ Field fields[] = {
     {"Wi-Fi access point", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.wifi_on, "on", "off"},
     {"Wi-Fi password", Kind::Text, settings.wifi_pass, sizeof(settings.wifi_pass), Chars::Any, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Sleep when idle after", Kind::Number, nullptr, 0, Chars::Call, &settings.sleep_min, 0, 30, 1, " min (0 = never)", nullptr, "", ""},
+    {"About DIGIWAVE", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Switch off", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
 };
 constexpr int kFields = sizeof(fields) / sizeof(fields[0]);
@@ -1486,7 +1491,7 @@ void buildSetup()
 {
     scr_setup = makeScreen();
     lv_obj_t *hint = makeLabel(scr_setup, 4, 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
-    lv_label_set_text(hint, "wheel: select   press: edit / done   digits and symbols: hold Space + key   Backspace: leave");
+    lv_label_set_text(hint, "wheel: select  press: edit  Space + key: digits, symbols  Backspace: back");
     for (int i = 0; i < kSetRows; ++i) {
         int y = 20 + i * 20;
         set_bg[i] = makeBox(scr_setup, 0, y, kWidth, 20, kColBg);
@@ -1528,6 +1533,69 @@ void drawSetup()
     lv_label_set_text_fmt(set_footer, "%d of %d", set_selected + 1, kFields);
 }
 
+// --- licence and credits ---------------------------------------------------------------
+
+// What the firmware is, what it may be used for, and whose work is in it.
+// THIRD-PARTY-NOTICES.md in the source has the same with versions.
+const char kAboutText[] =
+    "DIGIWAVE - digital radio modes on the LilyGo T-LoRa Pager\n"
+    "Copyright (C) 2026 Andres Leroi\n"
+    "github.com/MrNash23/DIGIWAVE\n\n"
+    "Free software under the GNU General Public License, version 3 or later. You may use, "
+    "study, share and change it; whoever passes it on has to pass on these freedoms and "
+    "the source. There is NO WARRANTY, to the extent permitted by law.\n\n"
+    "It builds on the work of others:\n"
+    "FT8 and FT4 - protocols by Joe Taylor K1JT and Steve Franke K9AN\n"
+    "ft8_lib - Karlis Goba (MIT)\n"
+    "11 m division list - from WSJT-CB, derived from WSJT-X (GPL 3)\n"
+    "LilyGoLib - Shenzhen Xinyuan Electronic Technology (MIT)\n"
+    "LVGL - LVGL Kft (MIT)\n"
+    "Montserrat typeface - The Montserrat Project Authors (SIL Open Font License 1.1)\n"
+    "RadioLib - Jan Gromes (MIT)\n"
+    "SensorLib, XPowersLib - Lewis He (MIT); sensor interface by Bosch Sensortec (BSD)\n"
+    "TinyGPSPlus - Mikal Hart (LGPL 2.1)\n"
+    "Adafruit TCA8418, BusIO - Adafruit Industries (BSD, MIT)\n"
+    "Arduino core for ESP32 - Espressif Systems and contributors (LGPL 2.1)\n"
+    "ESP-IDF with FreeRTOS, lwIP, mbedTLS, NimBLE - Espressif Systems and the authors of "
+    "these components (Apache 2.0, MIT, BSD)\n\n"
+    "The source, with which every part can be replaced, is at the address above.";
+
+lv_obj_t *scr_about, *about_box;
+
+void buildAbout()
+{
+    scr_about = makeScreen();
+    lv_obj_t *title = makeLabel(scr_about, 4, 2, kWidth - 8, &lv_font_montserrat_14, kColCq);
+    lv_label_set_text(title, "About DIGIWAVE");
+    // The text is longer than the screen and scrolls with the wheel
+    about_box = makeBox(scr_about, 0, 22, kWidth, 178, kColBg);
+    lv_obj_add_flag(about_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(about_box, LV_DIR_VER);
+    lv_obj_t *text = lv_label_create(about_box);
+    lv_obj_set_pos(text, 8, 0);
+    lv_obj_set_width(text, kWidth - 24);
+    lv_label_set_long_mode(text, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(text, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(text, kColText, 0);
+    lv_label_set_text_static(text, kAboutText);
+    lv_obj_t *hint = makeLabel(scr_about, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
+    lv_label_set_text(hint, "wheel: scroll   Backspace: back");
+}
+
+void openAbout()
+{
+    screen = Screen::About;
+    lv_obj_scroll_to_y(about_box, 0, LV_ANIM_OFF);
+    lv_screen_load(scr_about);
+}
+
+void aboutRotate(int dir)
+{
+    lv_obj_update_layout(about_box);
+    int32_t most = max((int32_t)0, lv_obj_get_height(lv_obj_get_child(about_box, 0)) - lv_obj_get_height(about_box));
+    lv_obj_scroll_to_y(about_box, constrain(lv_obj_get_scroll_y(about_box) + dir * 40, (int32_t)0, most), LV_ANIM_OFF);
+}
+
 void openSetup()
 {
     sub_from_app = inApp();
@@ -1564,7 +1632,11 @@ void setupRotate(int dir)
 void setupPress()
 {
     if (fields[set_selected].kind == Kind::Action) {
+        if (strncmp(fields[set_selected].name, "About", 5) == 0) {
+            openAbout();
+        } else {
             powerDown("Switched off");
+        }
         return;
     }
     editing = !editing;
@@ -1736,13 +1808,13 @@ void openMode(Mode m)
         sstv_dirty = true;
         lv_screen_load(scr_sstv);
         if (!noticeActive()) {
-            showNotice("Pictures are received by themselves   wheel press: functions");
+            showNotice("Pictures start by themselves   wheel press: functions");
         }
     } else {
         screen = Screen::Fax;
         lv_screen_load(scr_fax);
         if (!noticeActive()) {
-            showNotice("Enter: save   H: pause   C: clear   wheel press: functions");
+            showNotice("Enter: save  H: pause  C: clear  press: functions");
         }
     }
 }
@@ -1784,7 +1856,7 @@ void buildLog()
         log_row[i] = makeLabel(scr_log, 8, 22 + i * 20, kWidth - 16, &lv_font_montserrat_14, kColText);
     }
     lv_obj_t *hint = makeLabel(scr_log, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
-    lv_label_set_text_fmt(hint, "wheel: scroll   press: list / figures   Backspace: back   file on SD card: %s", logbook::kPath + 1);
+    lv_label_set_text_fmt(hint, "wheel: scroll  press: figures / list  Backspace: back  file: %s", logbook::kPath + 1);
 }
 
 bool log_stats = false;  // the page with the figures instead of the list
@@ -1814,7 +1886,7 @@ void drawLogStats()
         // The bands, as many as fit into two lines
         int n = 0;
         for (int i = 0; i < st.bands; ++i) {
-            char *out = line[6 + (i >= 6)];
+            char *out = line[6 + min(i / 5, 2)];  // five bands to a line
             size_t used = strlen(out);
             snprintf(out + used, sizeof(line[0]) - used, "%s%s: %d", used ? "    " : "", st.band[i].name, st.band[i].count);
             ++n;
@@ -1850,9 +1922,10 @@ void drawLog()
         const logbook::Row &r = logbook::row(idx);
         char km[12] = "";
         if (r.km >= 0) {
-            snprintf(km, sizeof(km), "   %d km", r.km);
+            snprintf(km, sizeof(km), "  %dkm", r.km);
         }
-        lv_label_set_text_fmt(log_row[i], "%.4s-%.2s-%.2s  %.2s:%.2s   %s   %s   %s / %s   %s %s%s", r.date, r.date + 4, r.date + 6,
+        // Kept short so that a row fits: two-digit year, no spaces around the reports
+        lv_label_set_text_fmt(log_row[i], "%.2s-%.2s-%.2s %.2s:%.2s  %s  %s  %s/%s  %s %s%s", r.date + 2, r.date + 4, r.date + 6,
                               r.time, r.time + 2, r.call, r.grid[0] ? r.grid : "----", r.sent, r.rcvd, r.band, r.mode, km);
     }
 }
@@ -1940,15 +2013,15 @@ void drawBand()
                 ft8::formatMhz(p.hz, f);
             }
             lv_label_set_text_fmt(band_row[i], "%-13s %s %s%s%s%s%s%s", p.label, f, offset ? "kHz" : "MHz", tune, p.remark[0] ? "  (" : "",
-                                  p.remark, p.remark[0] ? ")" : "", p.hz == current ? "    - in use" : "");
+                                  p.remark, p.remark[0] ? ")" : "", p.hz == current ? "   < now" : "");
         } else {
             lv_label_set_text_fmt(band_row[i], "Other:  %s%s kHz   (type the frequency)", band_other, idx == band_selected ? "_" : "");
         }
         lv_obj_set_style_bg_color(band_bg[i], idx == band_selected ? kColSel : kColBg, 0);
     }
     lv_label_set_text(band_footer, band_selected == band_entries
-                                       ? "digits: hold Space + key   point for half kHz   press: take it   Backspace: delete / leave"
-                                       : "wheel: select   press: take it   Backspace: leave");
+                                       ? "Space + key: digits  point: half kHz  press: take it  Backspace: back"
+                                       : "wheel: select   press: take it   Backspace: back");
 }
 
 void openBand()
@@ -2183,7 +2256,7 @@ void drawFaxView()
 
     char title[32];
     faxTitle(file.name, title, sizeof(title));
-    lv_label_set_text_fmt(faxview_title, "%s   line %u of %u   wheel: scroll   press: functions", title, (unsigned)faxview_top, (unsigned)file.lines);
+    lv_label_set_text_fmt(faxview_title, "%s   line %u of %u", title, (unsigned)faxview_top, (unsigned)file.lines);
 }
 
 void openFaxView()
@@ -2195,6 +2268,7 @@ void openFaxView()
     screen = Screen::FaxView;
     lv_screen_load(scr_faxview);
     drawFaxView();
+    showNotice("wheel: scroll   press: functions   Backspace: back");
 }
 
 void faxViewScroll(int dir)
@@ -2234,7 +2308,7 @@ struct Act {
 };
 constexpr int kMaxActs = 14;
 constexpr int kOverlayRows = 9;
-constexpr int kOverlayWidth = 300;
+constexpr int kOverlayWidth = 330;
 Act acts[kMaxActs];
 int act_count = 0;
 int act_selected = 0;
@@ -2337,7 +2411,7 @@ void fillActs()
         if (!settings.cb_mode) {
             addAct("", nextCqTag, true, "Addition to CQ: %s", cqTag()[0] ? cqTag() : "none");
         }
-        addAct("H", haltNow, false, "Halt (stop sending, drop the contact)");
+        addAct("H", haltNow, false, "Halt: stop, drop the contact");
         addAct("V", toggleView, true, "List shows: %s", list_view == ListView::Qso ? "the contact" : "everything heard");
         break;
     case Mode::CW:
@@ -2346,7 +2420,7 @@ void fillActs()
         }
         addAct("", clearText, false, "Clear the received text");
         addValue(&settings.cw_wpm, 5, 40, 1, "Sending speed: %d WPM", settings.cw_wpm);
-        addAct("", toggleOptionAct, true, "Follow the tone in the window: %s", st.option ? "on" : "off");
+        addAct("", toggleOptionAct, true, "Follow the tone: %s", st.option ? "on" : "off");
         break;
     case Mode::RTTY:
         if (st.transmitting) {
@@ -2360,27 +2434,27 @@ void fillActs()
         addAct("", toggleOptionAct, true, "Tones: %s", st.option ? "reversed" : "normal");
         break;
     case Mode::WEFAX:
-        addAct("Enter", saveFaxNow, false, "Save the picture now (%u lines)", (unsigned)faxPictureLines());
-        addAct("H", toggleFaxHold, false, fax_hold ? "Go on receiving" : "Pause reception (the picture stays)");
+        addAct("Enter", saveFaxNow, false, "Save now (%u lines)", (unsigned)faxPictureLines());
+        addAct("H", toggleFaxHold, false, fax_hold ? "Go on receiving" : "Pause (the picture stays)");
         addAct("A", toggleFaxAuto, true, "Save at the stop tone: %s", fax_auto ? "on" : "off");
-        addAct("C", clearFaxPicture, false, "Clear and start a new picture");
+        addAct("C", clearFaxPicture, false, "Clear, start a new picture");
         addAct("", alignFax, false, "Align the picture again");
         addAct("P", openFaxList, false, "Saved pictures");
         break;
     case Mode::SSTV:
-        addAct("Enter", saveSstvNow, false, "Save the picture now (%d lines)", sstv_have);
-        addAct("A", toggleSstvAuto, true, "Save every finished picture: %s", sstv_auto ? "on" : "off");
+        addAct("Enter", saveSstvNow, false, "Save now (%d lines)", sstv_have);
+        addAct("A", toggleSstvAuto, true, "Save finished pictures: %s", sstv_auto ? "on" : "off");
         if (engine::sstvState().receiving) {
             addAct("X", stopSstv, false, "Stop receiving this picture");
         }
-        addAct("", nextSstvFormat, true, "If the beginning was missed: %s", engine::sstvFormatName(sstv_manual));
+        addAct("", nextSstvFormat, true, "Format by hand: %s", engine::sstvFormatName(sstv_manual));
         addAct("M", startSstvByHand, false, "Receive now as %s", engine::sstvFormatName(sstv_manual));
         addAct("C", clearSstvNow, false, "Clear the picture");
         addAct("P", openFaxList, false, "Saved pictures");
         break;
     }
     bool letters = !engine::canSendText(st.mode);  // in CW and RTTY letters are text to send
-    addAct(letters ? "B" : "", openBand, false, st.mode == Mode::NAVTEX || st.mode == Mode::WEFAX ? "Stations and their frequencies" : "Band and frequency");
+    addAct(letters ? "B" : "", openBand, false, st.mode == Mode::NAVTEX || st.mode == Mode::WEFAX ? "Stations, frequencies" : "Band and frequency");
     addAct(engine::isSlotMode(st.mode) ? "L" : "", openLog, false, "Logbook");
     addAct(engine::isSlotMode(st.mode) ? "S" : "", openSetup, false, "Setup");
     addAct("Back", openHome, false, "Main menu");
@@ -2578,6 +2652,7 @@ void pollInput()
             drawLog();
             break;
         case Screen::Setup: setupRotate(dir); break;
+        case Screen::About: aboutRotate(dir); break;
         case Screen::Band:
             band_selected = constrain(band_selected + dir, 0, band_entries);
             drawBand();
@@ -2603,6 +2678,7 @@ void pollInput()
             drawLog();
             break;
         case Screen::Setup: setupPress(); break;
+        case Screen::About: break;
         case Screen::Band: closeBand(true); break;
         case Screen::FaxList: openFaxView(); break;
         }
@@ -2631,6 +2707,14 @@ void pollInput()
             }
             break;
         case Screen::Setup: setupKey(c); break;
+        case Screen::About:
+            if (c == 0x08) {
+                // Back to the setup, on the entry it was opened from
+                screen = Screen::Setup;
+                drawSetup();
+                lv_screen_load(scr_setup);
+            }
+            break;
         case Screen::Band: bandKey(c); break;
         case Screen::FaxList:
             if (c == 0x08) {
@@ -2716,6 +2800,7 @@ void begin()
     buildFax();
     buildSstv();
     buildSetup();
+    buildAbout();
     buildBand();
     buildFaxPages();
     buildOverlay();
@@ -2732,11 +2817,11 @@ void begin()
     const char *why = nullptr;
     switch (esp_reset_reason()) {
     case ESP_RST_DEEPSLEEP: why = "Woke up from sleep"; break;
-    case ESP_RST_PANIC: why = "Restarted after a fault"; break;
+    case ESP_RST_PANIC: why = "Restart after a fault"; break;
     case ESP_RST_INT_WDT:
     case ESP_RST_TASK_WDT:
-    case ESP_RST_WDT: why = "Restarted by the watchdog"; break;
-    case ESP_RST_BROWNOUT: why = "Restarted: supply voltage dropped"; break;
+    case ESP_RST_WDT: why = "Restart: watchdog"; break;
+    case ESP_RST_BROWNOUT: why = "Restart: low voltage"; break;
     default: break;
     }
     Serial.printf("[dw] reset reason %d%s%s\n", (int)esp_reset_reason(), why ? ": " : "", why ? why : "");

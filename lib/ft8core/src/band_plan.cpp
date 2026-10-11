@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Andres Leroi
 #include "band_plan.h"
 
 #include <stdio.h>
@@ -41,11 +43,11 @@ const BandPreset kRtty[] = {
     {"15 m", 21090000, ""},
     {"12 m", 24925000, ""},
     {"10 m", 28090000, ""},
-    {"DWD weather", 4583000, "50 Bd, shift 450 Hz"},
-    {"DWD weather", 7646000, "50 Bd, shift 450 Hz"},
-    {"DWD weather", 10100800, "50 Bd, shift 450 Hz"},
-    {"DWD weather", 11039000, "50 Bd, shift 450 Hz"},
-    {"DWD weather", 14467300, "50 Bd, shift 450 Hz"},
+    {"DWD weather", 4583000, "50 Bd / 450 Hz"},
+    {"DWD weather", 7646000, "50 Bd / 450 Hz"},
+    {"DWD weather", 10100800, "50 Bd / 450 Hz"},
+    {"DWD weather", 11039000, "50 Bd / 450 Hz"},
+    {"DWD weather", 14467300, "50 Bd / 450 Hz"},
 };
 
 const BandPreset kNavtex[] = {
