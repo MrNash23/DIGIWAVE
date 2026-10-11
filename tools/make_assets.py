@@ -28,6 +28,7 @@ IMAGES = [
     ("tile_rtty", "tile_rtty_256x256.png", "rgb565a8", TILE),
     ("tile_navtex", "tile_navtex_256x256.png", "rgb565a8", TILE),
     ("tile_wefax", "tile_wefax_256x256.png", "rgb565a8", TILE),
+    ("tile_sstv", "tile_sstv_256x256.png", "rgb565a8", TILE),
     ("tile_logbook", "tile_logbook_256x256.png", "rgb565a8", TILE),
     ("tile_setup", "tile_setup_256x256.png", "rgb565a8", TILE),
     ("tile_wifi", "tile_wifi_256x256.png", "rgb565a8", TILE),

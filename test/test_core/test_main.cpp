@@ -18,6 +18,7 @@
 #include <ft8_qso.h>
 #include <navtex_decoder.h>
 #include <rtty_codec.h>
+#include <sstv.h>
 #include <wefax_decoder.h>
 
 extern "C" {
@@ -170,6 +171,7 @@ static void test_roundtrip()
         float start;
     } cases[] = {
         {"CQ DL1ABC JO62", 1000.0f, 0.5f},
+        {"CQ POTA DL1ABC JO62", 1200.0f, 0.5f},
         {"K1XYZ DL1ABC -07", 1537.5f, 0.5f},
         {"K1XYZ DL1ABC R+12", 2400.0f, 1.3f},
         {"K1XYZ DL1ABC RR73", 450.0f, 0.1f},
@@ -443,7 +445,7 @@ static void test_adif()
     TEST_ASSERT_EQUAL_STRING(
         "<call:5>K1XYZ <gridsquare:4>FN42 <mode:3>FT8 <rst_sent:3>-12 <rst_rcvd:3>+03 "
         "<qso_date:8>20261010 <time_on:6>101500 <qso_date_off:8>20261010 <time_off:6>101545 "
-        "<band:3>20m <freq:9>14.075500 <station_callsign:6>DL1ABC <my_gridsquare:4>JO62 <eor>\n",
+        "<band:3>20m <freq:9>14.075500 <distance:4>6043 <station_callsign:6>DL1ABC <my_gridsquare:4>JO62 <eor>\n",
         line);
     TEST_ASSERT_NULL(bandName(13000));
     TEST_ASSERT_EQUAL_STRING("40m", bandName(7074));
@@ -496,6 +498,35 @@ static void test_qso_window()
     TEST_ASSERT_FALSE(belongsToQso(parsed("CQ G4ABC JO01"), false, "", ""));
 }
 
+static void test_distance_and_cq_addition()
+{
+    TEST_ASSERT_EQUAL(0, gridDistanceKm("JO62", "JO62"));
+    // Berlin to the middle of FN42 (Boston) is a little over 6000 km
+    TEST_ASSERT_INT_WITHIN(60, 6040, gridDistanceKm("JO62", "FN42"));
+    TEST_ASSERT_INT_WITHIN(15, 111, gridDistanceKm("JO62", "JO63"));       // one degree of latitude
+    TEST_ASSERT_INT_WITHIN(3, gridDistanceKm("JO62QM", "JO63QM"), 111);
+    TEST_ASSERT_EQUAL(-1, gridDistanceKm("JO62", ""));
+    TEST_ASSERT_EQUAL(-1, gridDistanceKm("RR73", "JO62"));
+
+    // A CQ with an addition is still a CQ from the same station
+    Decoded d = parsed("CQ POTA DL1ABC JO62");
+    TEST_ASSERT_TRUE(d.is_cq);
+    TEST_ASSERT_EQUAL_STRING("DL1ABC", d.call_de);
+    TEST_ASSERT_EQUAL_STRING("JO62", d.extra);
+
+    QsoConfig cfg;
+    strcpy(cfg.my_call, "DL1ABC");
+    strcpy(cfg.my_grid, "JO62");
+    strcpy(cfg.cq_tag, "SOTA");
+    Qso qso;
+    qso.configure(cfg);
+    qso.startCq(0);
+    char text[36];
+    Packing packing;
+    TEST_ASSERT_TRUE(qso.nextTx(0, text, &packing));
+    TEST_ASSERT_EQUAL_STRING("CQ SOTA DL1ABC JO62", text);
+}
+
 static void test_band_plan()
 {
     TEST_ASSERT_EQUAL(12, bandPresetCount(BandUse::FT8, false));
@@ -506,7 +537,7 @@ static void test_band_plan()
     TEST_ASSERT_EQUAL(bandPresetCount(BandUse::CW, false), bandPresetCount(BandUse::CW, true));
 
     // Every amateur frequency lies in the band it is named after
-    for (BandUse use : {BandUse::FT8, BandUse::FT4, BandUse::CW, BandUse::RTTY}) {
+    for (BandUse use : {BandUse::FT8, BandUse::FT4, BandUse::CW, BandUse::RTTY, BandUse::SSTV}) {
         for (int i = 0; i < bandPresetCount(use, false); ++i) {
             const BandPreset &p = bandPreset(use, false, i);
             if (strstr(p.label, " m") == nullptr) {
@@ -520,7 +551,7 @@ static void test_band_plan()
         }
     }
     // Every list has entries, and none of them an empty frequency
-    for (BandUse use : {BandUse::FT8, BandUse::FT4, BandUse::CW, BandUse::RTTY, BandUse::NAVTEX, BandUse::WEFAX}) {
+    for (BandUse use : {BandUse::FT8, BandUse::FT4, BandUse::CW, BandUse::RTTY, BandUse::NAVTEX, BandUse::WEFAX, BandUse::SSTV}) {
         TEST_ASSERT_GREATER_THAN(0, bandPresetCount(use, false));
         for (int i = 0; i < bandPresetCount(use, false); ++i) {
             TEST_ASSERT_GREATER_THAN_UINT32(100000, bandPreset(use, false, i).hz);
@@ -1322,6 +1353,151 @@ static void runFax(bool white_pulse, int lead_in_samples, float noise_rms)
     TEST_ASSERT_GREATER_OR_EQUAL(17, good);
 }
 
+// --- SSTV --------------------------------------------------------------------------
+
+static void sstvPattern(int x, int y, uint8_t *rgb, void *)
+{
+    // Colour bars above, a grey ramp in the middle, a colour gradient below
+    if (y % 96 < 40) {
+        static const uint8_t bars[8][3] = {{255, 255, 255}, {255, 255, 0}, {0, 255, 255}, {0, 255, 0},
+                                           {255, 0, 255},   {255, 0, 0},   {0, 0, 255},   {0, 0, 0}};
+        memcpy(rgb, bars[x / 40], 3);
+    } else if (y % 96 < 64) {
+        rgb[0] = rgb[1] = rgb[2] = (uint8_t)(x * 255 / 319);
+    } else {
+        rgb[0] = (uint8_t)(x * 255 / 319);
+        rgb[1] = (uint8_t)(255 - x * 255 / 319);
+        rgb[2] = 128;
+    }
+}
+
+struct SstvResult {
+    std::vector<uint8_t> image;  // lines x 320 x 3
+    int lines = 0;
+    bool started = false, ended = false;
+    digi::SstvMode mode = digi::SstvMode::None;
+};
+
+static void sstvLine(int line, const uint8_t *rgb, void *ctx)
+{
+    SstvResult *r = (SstvResult *)ctx;
+    if ((int)r->image.size() < (line + 1) * digi::kSstvWidth * 3) {
+        r->image.resize((line + 1) * digi::kSstvWidth * 3);
+    }
+    memcpy(&r->image[line * digi::kSstvWidth * 3], rgb, digi::kSstvWidth * 3);
+    r->lines = line + 1 > r->lines ? line + 1 : r->lines;
+}
+
+/// Sends the test picture and receives it. skip_header: the receiver is started by hand after the header.
+static SstvResult sstvLoop(digi::SstvMode mode, bool skip_header = false, float noise = 0)
+{
+    digi::SstvEncoder enc;
+    enc.begin(mode, sstvPattern, nullptr);
+    digi::SstvDecoder dec;
+    SstvResult r;
+    TEST_ASSERT_TRUE(dec.begin());
+    dec.onLine(sstvLine, &r);
+    int16_t buf[480];
+    uint32_t seed = 12345;
+    size_t total = 0;
+    bool hunting = false;
+    for (int pad = 0; pad < 2; ++pad) {
+        for (;;) {
+            size_t n = pad ? sizeof(buf) / sizeof(buf[0]) : enc.read(buf, sizeof(buf) / sizeof(buf[0]));
+            if (pad) {
+                memset(buf, 0, sizeof(buf));
+            }
+            if (n == 0) {
+                break;
+            }
+            for (size_t i = 0; i < n; ++i) {
+                seed = seed * 1664525u + 1013904223u;
+                buf[i] = (int16_t)(buf[i] + noise * ((int)(seed >> 16) - 32768));
+            }
+            total += n;
+            // Past the header (about 0.9 s) the receiver is told the format
+            if (skip_header && !hunting && total > 12000) {
+                hunting = true;
+                dec.start(mode);
+            }
+            if (!(skip_header && !hunting)) {
+                dec.feed(buf, n);
+            }
+            switch (dec.takeEvent()) {
+            case digi::SstvDecoder::Event::Start:
+                r.started = true;
+                r.mode = dec.mode();
+                break;
+            case digi::SstvDecoder::Event::End: r.ended = true; break;
+            default: break;
+            }
+            if (pad && total > 0 && pad++ > 60) {
+                break;  // a second and a half of silence after the picture
+            }
+        }
+    }
+    return r;
+}
+
+/// Mean difference to the test picture, leaving out the columns next to the edges of the bars.
+static float sstvError(const SstvResult &r, int first_line = 0)
+{
+    double sum = 0;
+    long n = 0;
+    for (int y = first_line; y < r.lines; ++y) {
+        for (int x = 4; x < digi::kSstvWidth - 4; ++x) {
+            if (y % 96 < 40 && (x % 40 < 4 || x % 40 > 35)) {
+                continue;
+            }
+            uint8_t want[3];
+            sstvPattern(x, y, want, nullptr);
+            for (int c = 0; c < 3; ++c) {
+                sum += abs((int)r.image[(y * digi::kSstvWidth + x) * 3 + c] - (int)want[c]);
+                ++n;
+            }
+        }
+    }
+    return n ? (float)(sum / n) : 999;
+}
+
+static void test_sstv_modes()
+{
+    for (digi::SstvMode mode : {digi::SstvMode::MartinM1, digi::SstvMode::MartinM2, digi::SstvMode::ScottieS1, digi::SstvMode::ScottieS2,
+                                digi::SstvMode::Robot36, digi::SstvMode::PD120, digi::SstvMode::PD180}) {
+        const char *name = digi::sstvInfo(mode).name;
+        SstvResult r = sstvLoop(mode);
+        TEST_ASSERT_TRUE_MESSAGE(r.started, name);
+        TEST_ASSERT_EQUAL_MESSAGE((int)mode, (int)r.mode, name);
+        TEST_ASSERT_TRUE_MESSAGE(r.ended, name);
+        TEST_ASSERT_EQUAL_MESSAGE(digi::sstvInfo(mode).lines, r.lines, name);
+        // Colour-difference modes halve the colour resolution, which costs a little on the gradient
+        float limit = (mode == digi::SstvMode::Robot36 || mode == digi::SstvMode::PD120 || mode == digi::SstvMode::PD180) ? 9.0f : 5.0f;
+        char text[64];
+        snprintf(text, sizeof(text), "%s: mean error %.1f", name, sstvError(r));
+        TEST_ASSERT_TRUE_MESSAGE(sstvError(r) < limit, text);
+    }
+}
+
+static void test_sstv_without_header_and_with_noise()
+{
+    // Started by hand in the middle: the lines after the first few must be right
+    SstvResult r = sstvLoop(digi::SstvMode::MartinM1, true);
+    TEST_ASSERT_TRUE(r.started);
+    TEST_ASSERT_TRUE(r.lines > 200);
+    // The receiver cannot know which line of the picture it joined at; compare the pattern, which repeats every 96 lines
+    SstvResult s = sstvLoop(digi::SstvMode::ScottieS1, true);
+    TEST_ASSERT_TRUE(s.started);
+    TEST_ASSERT_TRUE(s.lines > 200);
+
+    // Noise 20 dB below the signal
+    SstvResult n = sstvLoop(digi::SstvMode::MartinM1, false, 0.05f);
+    TEST_ASSERT_TRUE(n.started);
+    TEST_ASSERT_EQUAL(256, n.lines);
+    char text[64];
+    snprintf(text, sizeof(text), "with noise: mean error %.1f", sstvError(n));
+    TEST_ASSERT_TRUE_MESSAGE(sstvError(n) < 14.0f, text);
+}
+
 static void test_wefax_picture_and_phasing()
 {
     runFax(true, 1234, 0);
@@ -1365,6 +1541,7 @@ int main()
     RUN_TEST(test_qso_halt);
     RUN_TEST(test_adif);
     RUN_TEST(test_band_plan);
+    RUN_TEST(test_distance_and_cq_addition);
     RUN_TEST(test_qso_window);
     RUN_TEST(test_adif_field);
     RUN_TEST(test_grid_from_position);
@@ -1392,6 +1569,8 @@ int main()
     RUN_TEST(test_navtex_repairs_from_repeat);
     RUN_TEST(test_navtex_marks_unrecoverable_characters);
     RUN_TEST(test_navtex_wrong_sideband_and_noise);
+    RUN_TEST(test_sstv_modes);
+    RUN_TEST(test_sstv_without_header_and_with_noise);
     RUN_TEST(test_wefax_picture_and_phasing);
     RUN_TEST(test_wefax_manual_shift);
     return UNITY_END();

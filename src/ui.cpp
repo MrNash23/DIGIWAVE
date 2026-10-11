@@ -21,6 +21,7 @@
 namespace ui {
 
 const char kFaxDir[] = "/wefax";
+const char kSstvDir[] = "/sstv";
 
 namespace {
 
@@ -43,7 +44,7 @@ const lv_color_t kColWarn = lv_color_hex(0xE0A020);
 const lv_color_t kColAccent = lv_color_hex(0x3766FF);
 const lv_color_t kColFrame = lv_color_hex(0x202D7A);
 
-enum class Screen { Home, Slot, Text, Fax, Log, Setup, Band, FaxList, FaxView };
+enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, Band, FaxList, FaxView };
 Screen screen = Screen::Home;
 
 void openHome();
@@ -310,6 +311,8 @@ bool view_by_hand = false;
 bool contact_active = false;
 uint32_t contact_ended = 0;
 const lv_color_t kColOwn = lv_color_hex(0xFFD23C);     // our own transmissions
+const lv_color_t kColWorked = lv_color_hex(0x5C5C5C);  // in the logbook on this band
+const lv_color_t kColWorkedElsewhere = lv_color_hex(0x7FA0B8);  // in the logbook on another band
 const lv_color_t kColOwnBg = lv_color_hex(0x2A2408);
 
 void buildSlot()
@@ -320,8 +323,8 @@ void buildSlot()
         int y = kListY + i * kRowHeight;
         row_bg[i] = makeBox(scr_slot, 0, y, kWidth, kRowHeight, kColBg);
         row_meta[i] = makeLabel(scr_slot, 4, y + 1, 124, &lv_font_montserrat_14, kColDim);
-        row_msg[i] = makeLabel(scr_slot, 132, y + 1, 188, &lv_font_montserrat_14, kColText);
-        row_info[i] = makeLabel(scr_slot, 324, y + 1, 152, &lv_font_montserrat_14, kColDim);
+        row_msg[i] = makeLabel(scr_slot, 132, y + 1, 164, &lv_font_montserrat_14, kColText);
+        row_info[i] = makeLabel(scr_slot, 298, y + 1, 178, &lv_font_montserrat_14, kColDim);
         lv_obj_set_style_text_align(row_info[i], LV_TEXT_ALIGN_RIGHT, 0);
     }
     slot_wf = makeWaterfall(scr_slot, kSlotWfY, 44);
@@ -388,12 +391,33 @@ void drawList()
         lv_label_set_text_fmt(row_meta[i], "%02u%02u%02u  %+03d  %4d", (unsigned)(t / 3600 % 24), (unsigned)(t / 60 % 60),
                               (unsigned)(t % 60), e.msg.snr, (int)e.msg.freq);
         lv_label_set_text(row_msg[i], e.msg.text);
-        if (e.country[0] != '\0') {
-            lv_label_set_text_fmt(row_info[i], "%s%s(%s)", e.grid, e.grid[0] ? " " : "", e.country);
+        // Locator, distance from the own one, country
+        char where[20] = "";
+        int km = ft8::gridDistanceKm(settings.grid, e.grid);
+        if (km >= 0) {
+            snprintf(where, sizeof(where), "%s %d km", e.grid, km);
         } else {
-            lv_label_set_text(row_info[i], e.grid);
+            snprintf(where, sizeof(where), "%s", e.grid);
         }
-        lv_obj_set_style_text_color(row_msg[i], e.to_me ? kColToMe : (e.msg.is_cq ? kColCq : kColText), 0);
+        if (e.country[0] != '\0') {
+            lv_label_set_text_fmt(row_info[i], "%s%s(%s)", where, where[0] ? " " : "", e.country);
+        } else {
+            lv_label_set_text(row_info[i], where);
+        }
+        // Stations already in the logbook step back: grey on this band, muted when only worked on another
+        lv_color_t color = e.msg.is_cq ? kColCq : kColText;
+        if (e.to_me) {
+            color = kColToMe;
+        } else if (e.msg.call_de[0] != '\0') {
+            const char *band = ft8::bandName(settings.dialHz((int)engine::mode()) / 1000);
+            int worked = logbook::worked(e.msg.call_de, band ? band : "");
+            if (worked == 2) {
+                color = kColWorked;
+            } else if (worked == 1) {
+                color = kColWorkedElsewhere;
+            }
+        }
+        lv_obj_set_style_text_color(row_msg[i], color, 0);
         lv_obj_set_style_bg_color(row_bg[i], idx == selected ? kColSel : kColBg, 0);
     }
 }
@@ -510,12 +534,28 @@ void toggleTx()
     engine::setTxEnabled(on);
 }
 
+/// The addition to CQ in use; none in CB operation, whose call has no room for it.
+const char *cqTag()
+{
+    return settings.cb_mode ? "" : kCqTags[constrain(settings.cq_tag, 0, kCqTagCount - 1)];
+}
+
 void callCq()
 {
     if (stationConfigured()) {
         engine::startCq();
-        showNotice(engine::status().tx_enabled ? "Calling CQ" : "CQ armed  -  TX is off (T)");
+        char text[56];
+        snprintf(text, sizeof(text), "%s CQ%s%s%s", engine::status().tx_enabled ? "Calling" : "Armed:", cqTag()[0] ? " " : "", cqTag(),
+                 engine::status().tx_enabled ? "" : "  -  TX is off (T)");
+        showNotice(text);
     }
+}
+
+void nextCqTag()
+{
+    settings.cq_tag = (settings.cq_tag + 1) % kCqTagCount;
+    settings.save();
+    engine::applySettings();
 }
 
 void haltNow()
@@ -1048,6 +1088,270 @@ void faxKey(char c)
     }
 }
 
+// --- SSTV screen ---------------------------------------------------------------------------
+
+constexpr int kSstvViewX = (kWidth - engine::kSstvWidth) / 2;
+lv_obj_t *scr_sstv;
+Header sstv_header;
+lv_obj_t *sstv_canvas, *sstv_left, *sstv_right;
+lv_draw_buf_t *sstv_buf = nullptr;
+uint16_t *sstv_img = nullptr;   // the whole picture, kSstvWidth x kSstvMaxLines, in PSRAM
+int sstv_have = 0;              // lines of the current picture received so far
+int sstv_top = 0;               // first line shown
+bool sstv_follow = true;        // the view moves with the line being received
+bool sstv_auto = true;          // a finished picture is saved by itself
+bool sstv_unsaved = false;
+bool sstv_dirty = true;
+int sstv_manual = 0;            // format used when a picture is started by hand
+char sstv_format[12] = "";
+char sstv_name[40] = "";
+
+void buildSstv()
+{
+    scr_sstv = makeScreen();
+    sstv_header = makeHeader(scr_sstv, false);
+    sstv_canvas = lv_canvas_create(scr_sstv);
+    sstv_buf = lv_draw_buf_create(engine::kSstvWidth, kFaxHeight, LV_COLOR_FORMAT_RGB565, 0);
+    if (sstv_buf != nullptr) {
+        lv_canvas_set_draw_buf(sstv_canvas, sstv_buf);
+        lv_canvas_fill_bg(sstv_canvas, lv_color_hex(0x000000), LV_OPA_COVER);
+    }
+    lv_obj_set_pos(sstv_canvas, kSstvViewX, kFaxY);
+    // The picture is narrower than the screen; the margins tell what is going on
+    sstv_left = makeLabel(scr_sstv, 3, kFaxY + 4, kSstvViewX - 6, &lv_font_montserrat_12, kColText);
+    lv_label_set_long_mode(sstv_left, LV_LABEL_LONG_WRAP);
+    sstv_right = makeLabel(scr_sstv, kSstvViewX + engine::kSstvWidth + 3, kFaxY + 4, kSstvViewX - 6, &lv_font_montserrat_12, kColDim);
+    lv_label_set_long_mode(sstv_right, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(sstv_right, "Enter:\nsave\n\nwheel:\nscroll\n\npress:\nfunctions");
+}
+
+/// Writes the lines received so far as a 24-bit BMP. Returns false if nothing was saved.
+bool saveSstvPicture()
+{
+    if (sstv_img == nullptr || sstv_have < 16) {
+        showNotice("No picture to save yet");
+        return false;
+    }
+    time_t secs = (time_t)(timebase::utcMs() / 1000);
+    struct tm t;
+    gmtime_r(&secs, &t);
+    snprintf(sstv_name, sizeof(sstv_name), "SS_%04d%02d%02d_%02d%02d%02d.bmp", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour,
+             t.tm_min, t.tm_sec);
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", kSstvDir, sstv_name);
+    const uint32_t row_bytes = engine::kSstvWidth * 3;  // a multiple of four, as the format wants
+    const uint32_t image_size = row_bytes * (uint32_t)sstv_have;
+
+    instance.lockSPI();
+    bool ok = SD.cardType() != CARD_NONE;
+    if (ok) {
+        SD.mkdir(kSstvDir);
+        File f = SD.open(path, FILE_WRITE);
+        ok = (bool)f;
+        if (ok) {
+            uint8_t h[54] = {0};
+            h[0] = 'B';
+            h[1] = 'M';
+            putLe(h + 2, 54 + image_size, 4);
+            putLe(h + 10, 54, 4);
+            putLe(h + 14, 40, 4);
+            putLe(h + 18, engine::kSstvWidth, 4);
+            putLe(h + 22, (uint32_t)sstv_have, 4);  // positive: rows from the bottom up, the form every program reads
+            putLe(h + 26, 1, 2);
+            putLe(h + 28, 24, 2);
+            putLe(h + 34, image_size, 4);
+            ok = f.write(h, sizeof(h)) == sizeof(h);
+            static uint8_t row[engine::kSstvWidth * 3];
+            for (int y = sstv_have - 1; y >= 0 && ok; --y) {
+                const uint16_t *src = sstv_img + (size_t)y * engine::kSstvWidth;
+                for (int x = 0; x < engine::kSstvWidth; ++x) {
+                    uint16_t c = src[x];
+                    row[3 * x] = (uint8_t)((c & 0x1F) * 255 / 31);
+                    row[3 * x + 1] = (uint8_t)(((c >> 5) & 0x3F) * 255 / 63);
+                    row[3 * x + 2] = (uint8_t)((c >> 11) * 255 / 31);
+                }
+                ok = f.write(row, sizeof(row)) == sizeof(row);
+            }
+            f.close();
+            if (!ok) {
+                SD.remove(path);
+            }
+        }
+    }
+    instance.unlockSPI();
+    char text[56];
+    if (ok) {
+        sstv_unsaved = false;
+        snprintf(text, sizeof(text), "Saved %d lines as %s", sstv_have, sstv_name);
+    } else {
+        snprintf(text, sizeof(text), "NOT saved - SD card?");
+    }
+    showNotice(text);
+    return ok;
+}
+
+void saveSstvIfUnsaved()
+{
+    if (sstv_auto && sstv_unsaved && sstv_have >= 40) {
+        saveSstvPicture();
+    }
+}
+
+void clearSstvPicture()
+{
+    if (sstv_img != nullptr) {
+        memset(sstv_img, 0, (size_t)engine::kSstvWidth * engine::kSstvMaxLines * sizeof(uint16_t));
+    }
+    sstv_have = 0;
+    sstv_top = 0;
+    sstv_follow = true;
+    sstv_unsaved = false;
+    sstv_dirty = true;
+}
+
+/// Takes picture lines from the receiver, whichever screen is shown.
+void processSstv()
+{
+    switch (engine::nextSstvEvent()) {
+    case engine::SstvEvent::Start: {
+        saveSstvIfUnsaved();
+        clearSstvPicture();
+        engine::SstvState state = engine::sstvState();
+        strncpy(sstv_format, state.format, sizeof(sstv_format) - 1);
+        char text[56];
+        snprintf(text, sizeof(text), "A picture begins: %s", sstv_format);
+        showNotice(text);
+        break;
+    }
+    case engine::SstvEvent::End:
+        if (sstv_auto) {
+            saveSstvIfUnsaved();
+        } else {
+            showNotice("Picture complete - Enter saves it");
+        }
+        break;
+    default:
+        break;
+    }
+
+    static engine::SstvLine line;
+    while (engine::nextSstvLine(&line)) {
+        if (sstv_img == nullptr) {
+            sstv_img = (uint16_t *)ps_calloc((size_t)engine::kSstvWidth * engine::kSstvMaxLines, sizeof(uint16_t));
+        }
+        if (sstv_img == nullptr || line.line < 0 || line.line >= engine::kSstvMaxLines) {
+            continue;
+        }
+        memcpy(sstv_img + (size_t)line.line * engine::kSstvWidth, line.pixels, sizeof(line.pixels));
+        sstv_have = max(sstv_have, line.line + 1);
+        sstv_unsaved = true;
+        sstv_dirty = true;
+        if (sstv_follow) {
+            sstv_top = max(0, sstv_have - kFaxHeight);
+        }
+    }
+}
+
+void drawSstv()
+{
+    engine::Status st = engine::status();
+    drawHeader(sstv_header, st);
+    engine::SstvState state = engine::sstvState();
+    char name[28];
+    modeWithFrequency(Mode::SSTV, name, sizeof(name));
+    if (state.receiving) {
+        lv_label_set_text_fmt(sstv_header.state, "%s  %s  line %d of %d", name, state.format, state.line, state.lines);
+    } else {
+        lv_label_set_text_fmt(sstv_header.state, "%s  waiting for a picture", name);
+    }
+    lv_obj_set_style_text_color(sstv_header.state, state.receiving ? kColCq : kColText, 0);
+    lv_label_set_text_fmt(sstv_left, "%s\n%d lines\n\n%s\n\n%s", sstv_have ? sstv_format : "no picture", sstv_have,
+                          sstv_have == 0 ? "" : (sstv_unsaved ? (sstv_auto ? "saved when complete" : "not saved") : "saved"),
+                          sstv_auto ? "auto save on" : "auto save off");
+
+    if (sstv_dirty && sstv_buf != nullptr) {
+        sstv_dirty = false;
+        uint32_t stride = sstv_buf->header.stride;
+        for (int row = 0; row < kFaxHeight; ++row) {
+            uint16_t *out = (uint16_t *)(sstv_buf->data + stride * row);
+            int y = sstv_top + row;
+            if (sstv_img != nullptr && y < sstv_have) {
+                memcpy(out, sstv_img + (size_t)y * engine::kSstvWidth, engine::kSstvWidth * sizeof(uint16_t));
+            } else {
+                memset(out, 0, engine::kSstvWidth * sizeof(uint16_t));
+            }
+        }
+        lv_obj_invalidate(sstv_canvas);
+    }
+}
+
+void sstvRotate(int dir)
+{
+    int most = max(0, sstv_have - kFaxHeight);
+    sstv_top = constrain(sstv_top + dir * 30, 0, most);
+    sstv_follow = sstv_top == most;
+    sstv_dirty = true;
+}
+
+void saveSstvNow()
+{
+    showNotice("Saving the picture ...");
+    drawNoticeBar();
+    lv_timer_handler();
+    saveSstvPicture();
+}
+
+void toggleSstvAuto()
+{
+    sstv_auto = !sstv_auto;
+    showNotice(sstv_auto ? "A picture is saved when it is complete" : "Pictures are only saved with Enter");
+}
+
+void nextSstvFormat()
+{
+    sstv_manual = (sstv_manual + 1) % engine::kSstvFormats;
+}
+
+/// For a picture whose beginning was missed: the format has to be told, the receiver finds the lines itself.
+void startSstvByHand()
+{
+    saveSstvIfUnsaved();
+    clearSstvPicture();
+    engine::sstvStart(sstv_manual);
+    char text[56];
+    snprintf(text, sizeof(text), "Waiting for a line of %s", engine::sstvFormatName(sstv_manual));
+    showNotice(text);
+}
+
+void stopSstv()
+{
+    engine::sstvStop();
+    showNotice("Stopped");
+}
+
+void clearSstvNow()
+{
+    engine::sstvStop();
+    clearSstvPicture();
+    showNotice("Cleared");
+}
+
+void sstvKey(char c)
+{
+    switch (tolower((unsigned char)c)) {
+    case '\n':
+    case '\r': saveSstvNow(); break;
+    case 'a': toggleSstvAuto(); break;
+    case 'b': openBand(); break;
+    case 'c': clearSstvNow(); break;
+    case 'm': startSstvByHand(); break;
+    case 'p': openFaxList(); break;
+    case 'x': stopSstv(); break;
+    case 0x08: openHome(); break;
+    default: break;
+    }
+}
+
 // --- power saving ------------------------------------------------------------------------
 
 uint32_t last_input = 0;    // millis() of the last key or wheel event
@@ -1078,6 +1382,8 @@ void powerDown(const char *reason)
 
     engine::stop();
     saveFaxIfUnsaved();
+    saveSstvIfUnsaved();
+    saveSstvIfUnsaved();
     web::shutdown();
     settings.save();
     delay(1200);
@@ -1092,7 +1398,7 @@ void pollPower(const engine::Status &st, bool received)
     // WEFAX and NAVTEX are listened to for a long time without touching the
     // device, and a picture arriving is not "received" in the sense of a
     // decode: these modes keep the device awake, only the display goes off.
-    bool listening = st.mode == Mode::WEFAX || st.mode == Mode::NAVTEX;
+    bool listening = st.mode == Mode::WEFAX || st.mode == Mode::NAVTEX || st.mode == Mode::SSTV;
     bool busy = received || listening || st.transmitting || web::clients() > 0 ||
                 (engine::isSlotMode(st.mode) && strcmp(st.qso_state, "Idle") != 0);
     if (busy) {
@@ -1294,7 +1600,7 @@ void setupKey(char c)
 // The artwork of each tile carries its frame and its name
 const lv_image_dsc_t *const kTileIcons[] = {
     &img_tile_ft8,    &img_tile_ft4,   &img_tile_cw,      &img_tile_rtty,  &img_tile_navtex,
-    &img_tile_wefax,  &img_tile_logbook, &img_tile_setup, &img_tile_wifi,
+    &img_tile_wefax,  &img_tile_sstv,  &img_tile_logbook, &img_tile_setup, &img_tile_wifi,
 };
 constexpr int kTiles = sizeof(kTileIcons) / sizeof(kTileIcons[0]);
 constexpr int kTileLog = engine::kModes, kTileSetup = kTileLog + 1, kTileWifi = kTileLog + 2;
@@ -1381,6 +1687,10 @@ void openMode(Mode m)
             fax_total = fax_begin = fax_saved_to = 0;
             fax_hold = false;
         }
+        if (engine::mode() == Mode::SSTV) {
+            saveSstvIfUnsaved();
+            clearSstvPicture();
+        }
         engine::setMode(m);
         settings.last_mode = (int)m;
         settings.save();
@@ -1404,6 +1714,13 @@ void openMode(Mode m)
         lv_screen_load(scr_text);
         if (!noticeActive()) {
             showNotice("Press the wheel for functions");
+        }
+    } else if (m == Mode::SSTV) {
+        screen = Screen::Sstv;
+        sstv_dirty = true;
+        lv_screen_load(scr_sstv);
+        if (!noticeActive()) {
+            showNotice("Pictures are received by themselves   wheel press: functions");
         }
     } else {
         screen = Screen::Fax;
@@ -1451,17 +1768,62 @@ void buildLog()
         log_row[i] = makeLabel(scr_log, 8, 22 + i * 20, kWidth - 16, &lv_font_montserrat_14, kColText);
     }
     lv_obj_t *hint = makeLabel(scr_log, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
-    lv_label_set_text_fmt(hint, "wheel: scroll   Backspace: menu   file on SD card: %s", logbook::kPath + 1);
+    lv_label_set_text_fmt(hint, "wheel: scroll   press: list / figures   Backspace: back   file on SD card: %s", logbook::kPath + 1);
+}
+
+bool log_stats = false;  // the page with the figures instead of the list
+
+void drawLogStats()
+{
+    time_t secs = (time_t)(timebase::utcMs() / 1000);
+    struct tm t;
+    gmtime_r(&secs, &t);
+    char today[9];
+    snprintf(today, sizeof(today), "%04d%02d%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
+    const logbook::Stats &st = logbook::stats(today);
+    lv_label_set_text(log_title, "Logbook  -  figures over all QSOs of this device      press: list");
+    char line[kLogRows][96];
+    for (auto &l : line) {
+        l[0] = '\0';
+    }
+    snprintf(line[0], sizeof(line[0]), "QSOs: %d      today (UTC): %d", st.total, st.today);
+    if (st.total > 0) {
+        snprintf(line[1], sizeof(line[1]), "From %.4s-%.2s-%.2s to %.4s-%.2s-%.2s", st.first_date, st.first_date + 4, st.first_date + 6,
+                 st.last_date, st.last_date + 4, st.last_date + 6);
+        snprintf(line[2], sizeof(line[2]), "FT8: %d      FT4: %d", st.ft8, st.ft4);
+        snprintf(line[3], sizeof(line[3]), "Countries: %d", st.countries);
+        if (st.with_distance > 0) {
+            snprintf(line[4], sizeof(line[4]), "Farthest: %s, %d km      average: %ld km", st.km_max_call, st.km_max, st.km_sum / st.with_distance);
+        }
+        // The bands, as many as fit into two lines
+        int n = 0;
+        for (int i = 0; i < st.bands; ++i) {
+            char *out = line[6 + (i >= 6)];
+            size_t used = strlen(out);
+            snprintf(out + used, sizeof(line[0]) - used, "%s%s: %d", used ? "    " : "", st.band[i].name, st.band[i].count);
+            ++n;
+        }
+        if (n > 0) {
+            snprintf(line[5], sizeof(line[5]), "By band:");
+        }
+    }
+    for (int i = 0; i < kLogRows; ++i) {
+        lv_label_set_text(log_row[i], line[i]);
+    }
 }
 
 void drawLog()
 {
+    if (log_stats) {
+        drawLogStats();
+        return;
+    }
     int count = logbook::count();
     log_top = constrain(log_top, 0, max(0, count - kLogRows));
     if (count == 0) {
         lv_label_set_text(log_title, "Logbook  -  no QSOs yet");
     } else {
-        lv_label_set_text_fmt(log_title, "Logbook  -  %d QSOs, newest first", logbook::total());
+        lv_label_set_text_fmt(log_title, "Logbook  -  %d QSOs, newest first      press: figures", logbook::total());
     }
     for (int i = 0; i < kLogRows; ++i) {
         int idx = count - 1 - (log_top + i);  // newest on top
@@ -1470,14 +1832,19 @@ void drawLog()
             continue;
         }
         const logbook::Row &r = logbook::row(idx);
-        lv_label_set_text_fmt(log_row[i], "%.4s-%.2s-%.2s  %.2s:%.2s   %s   %s   %s / %s   %s %s", r.date, r.date + 4, r.date + 6,
-                              r.time, r.time + 2, r.call, r.grid[0] ? r.grid : "----", r.sent, r.rcvd, r.band, r.mode);
+        char km[12] = "";
+        if (r.km >= 0) {
+            snprintf(km, sizeof(km), "   %d km", r.km);
+        }
+        lv_label_set_text_fmt(log_row[i], "%.4s-%.2s-%.2s  %.2s:%.2s   %s   %s   %s / %s   %s %s%s", r.date, r.date + 4, r.date + 6,
+                              r.time, r.time + 2, r.call, r.grid[0] ? r.grid : "----", r.sent, r.rcvd, r.band, r.mode, km);
     }
 }
 
 void openLog()
 {
     sub_from_app = inApp();
+    log_stats = false;
     log_top = 0;
     screen = Screen::Log;
     drawLog();
@@ -1602,6 +1969,14 @@ void closeBand(bool take)
             showNotice("Not a frequency in kHz - nothing changed");
         } else {
             settings.dialHz((int)engine::mode()) = hz;
+            if (engine::mode() == Mode::RTTY && band_selected < band_entries) {
+                // The weather service and amateurs use different speeds and shifts; the choice sets them
+                bool dwd = strncmp(band_preset[band_selected]->label, "DWD", 3) == 0;
+                settings.rtty_50_baud = dwd;
+                settings.rtty_shift = dwd ? 450 : 170;
+                engine::applySettings();
+                showNotice(dwd ? "Set for DWD weather: 50 Bd, shift 450 Hz" : "Set for amateur RTTY: 45.45 Bd, shift 170 Hz");
+            }
             settings.save();
         }
     }
@@ -1664,6 +2039,13 @@ void buildFaxPages()
     lv_obj_set_pos(faxview_canvas, 0, kFaxY);
 }
 
+bool pics_sstv = false;  // the pages show the pictures of SSTV instead of those of WEFAX
+
+const char *picsDir()
+{
+    return pics_sstv ? kSstvDir : kFaxDir;
+}
+
 void scanFaxFiles()
 {
     if (fax_files == nullptr) {
@@ -1674,7 +2056,7 @@ void scanFaxFiles()
         return;
     }
     instance.lockSPI();
-    File dir = SD.cardType() != CARD_NONE ? SD.open(kFaxDir) : File();
+    File dir = SD.cardType() != CARD_NONE ? SD.open(picsDir()) : File();
     if (dir && dir.isDirectory()) {
         for (File f = dir.openNextFile(); f && fax_file_count < kMaxFaxFiles; f = dir.openNextFile()) {
             const char *name = f.name();
@@ -1683,7 +2065,8 @@ void scanFaxFiles()
                 FaxFile &entry = fax_files[fax_file_count++];
                 strcpy(entry.name, name);
                 uint32_t size = (uint32_t)f.size();
-                entry.lines = size > kBmpDataOffset ? (size - kBmpDataOffset) / engine::kFaxWidth : 0;
+                entry.lines = pics_sstv ? (size > 54 ? (size - 54) / (engine::kSstvWidth * 3) : 0)
+                                        : (size > kBmpDataOffset ? (size - kBmpDataOffset) / engine::kFaxWidth : 0);
             }
             f.close();
         }
@@ -1696,7 +2079,7 @@ void scanFaxFiles()
 /// "WF_20261011_143210.bmp" as "2026-10-11 14:32:10"; other names stay as they are.
 void faxTitle(const char *name, char *out, size_t size)
 {
-    if (strlen(name) >= 18 && strncmp(name, "WF_", 3) == 0 && name[11] == '_') {
+    if (strlen(name) >= 18 && name[2] == '_' && name[11] == '_') {
         snprintf(out, size, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s UTC", name + 3, name + 7, name + 9, name + 12, name + 14, name + 16);
     } else {
         snprintf(out, size, "%s", name);
@@ -1705,12 +2088,12 @@ void faxTitle(const char *name, char *out, size_t size)
 
 void drawFaxList()
 {
-    lv_label_set_text_fmt(faxlist_title, "Saved WEFAX pictures (%d)", fax_file_count);
+    lv_label_set_text_fmt(faxlist_title, "Saved %s pictures (%d)", pics_sstv ? "SSTV" : "WEFAX", fax_file_count);
     int top = constrain(fax_file_selected - kFaxListRows / 2, 0, max(0, fax_file_count - kFaxListRows));
     for (int i = 0; i < kFaxListRows; ++i) {
         int idx = top + i;
         if (idx >= fax_file_count) {
-            lv_label_set_text(faxlist_row[i], i == 0 && fax_file_count == 0 ? "None yet - Enter in WEFAX saves the picture" : "");
+            lv_label_set_text(faxlist_row[i], i == 0 && fax_file_count == 0 ? "None yet - Enter saves the picture being received" : "");
             lv_obj_set_style_bg_color(faxlist_bg[i], kColBg, 0);
             continue;
         }
@@ -1723,6 +2106,7 @@ void drawFaxList()
 
 void openFaxList()
 {
+    pics_sstv = engine::mode() == Mode::SSTV;
     scanFaxFiles();
     fax_file_selected = constrain(fax_file_selected, 0, max(0, fax_file_count - 1));
     screen = Screen::FaxList;
@@ -1744,11 +2128,24 @@ void drawFaxView()
     const FaxFile &file = fax_files[fax_file_selected];
     static uint8_t pair[2 * engine::kFaxWidth];
     char path[64];
-    snprintf(path, sizeof(path), "%s/%s", kFaxDir, file.name);
+    snprintf(path, sizeof(path), "%s/%s", picsDir(), file.name);
     uint32_t stride = faxview_buf->header.stride;
     instance.lockSPI();
     File f = SD.open(path, FILE_READ);
-    for (int row = 0; row < kFaxHeight; ++row) {
+    for (int row = 0; pics_sstv && row < kFaxHeight; ++row) {
+        // A colour picture, 320 pixels wide in the middle of the screen, its rows stored from the bottom up
+        uint16_t *out = (uint16_t *)(faxview_buf->data + stride * row);
+        static uint8_t bgr[engine::kSstvWidth * 3];
+        uint32_t line = faxview_top + (uint32_t)row;
+        bool have = f && line < file.lines && f.seek(54 + (file.lines - 1 - line) * sizeof(bgr)) && f.read(bgr, sizeof(bgr)) == sizeof(bgr);
+        for (int x = 0; x < kWidth; ++x) {
+            int px = x - kSstvViewX;
+            out[x] = have && px >= 0 && px < engine::kSstvWidth
+                         ? lv_color_to_u16(lv_color_make(bgr[3 * px + 2], bgr[3 * px + 1], bgr[3 * px]))
+                         : lv_color_to_u16(kColBg);
+        }
+    }
+    for (int row = 0; !pics_sstv && row < kFaxHeight; ++row) {
         uint16_t *out = (uint16_t *)(faxview_buf->data + stride * row);
         uint32_t line = faxview_top + 2 * (uint32_t)row;
         bool have = f && line + 1 < file.lines && f.seek(kBmpDataOffset + line * engine::kFaxWidth) && f.read(pair, sizeof(pair)) == sizeof(pair);
@@ -1787,8 +2184,9 @@ void openFaxView()
 void faxViewScroll(int dir)
 {
     const FaxFile &file = fax_files[fax_file_selected];
-    int32_t most = (int32_t)file.lines - 2 * kFaxHeight;
-    faxview_top = (uint32_t)constrain((int32_t)faxview_top + dir * 60, (int32_t)0, max((int32_t)0, most));
+    // WEFAX shows every second line, SSTV every line
+    int32_t most = (int32_t)file.lines - (pics_sstv ? 1 : 2) * kFaxHeight;
+    faxview_top = (uint32_t)constrain((int32_t)faxview_top + dir * (pics_sstv ? 30 : 60), (int32_t)0, max((int32_t)0, most));
     drawFaxView();
 }
 
@@ -1797,7 +2195,7 @@ void deleteFaxPicture()
     const FaxFile &file = fax_files[fax_file_selected];
     // Choosing the entry in the list of functions is the decision; there is no second question
     char path[64], text[56];
-    snprintf(path, sizeof(path), "%s/%s", kFaxDir, file.name);
+    snprintf(path, sizeof(path), "%s/%s", picsDir(), file.name);
     snprintf(text, sizeof(text), "Deleted %s", file.name);
     instance.lockSPI();
     bool ok = SD.remove(path);
@@ -1866,7 +2264,8 @@ void addValue(int *value, int min, int max, int step, const char *fmt, ...)
 
 bool inApp()
 {
-    return screen == Screen::Slot || screen == Screen::Text || screen == Screen::Fax || screen == Screen::FaxList || screen == Screen::FaxView;
+    return screen == Screen::Slot || screen == Screen::Text || screen == Screen::Fax || screen == Screen::Sstv || screen == Screen::FaxList ||
+           screen == Screen::FaxView;
 }
 
 /// Where Back leads from a page that was opened out of a mode.
@@ -1918,7 +2317,10 @@ void fillActs()
     case Mode::FT4:
         addAct("Enter", slotPress, false, "Call the selected station");
         addAct("T", toggleTx, true, "Transmitter: %s", st.tx_enabled ? "ON" : "off");
-        addAct("C", callCq, false, "Call CQ");
+        addAct("C", callCq, false, "Call CQ%s%s", cqTag()[0] ? " " : "", cqTag());
+        if (!settings.cb_mode) {
+            addAct("", nextCqTag, true, "Addition to CQ: %s", cqTag()[0] ? cqTag() : "none");
+        }
         addAct("H", haltNow, false, "Halt (stop sending, drop the contact)");
         addAct("V", toggleView, true, "List shows: %s", list_view == ListView::Qso ? "the contact" : "everything heard");
         break;
@@ -1947,6 +2349,17 @@ void fillActs()
         addAct("A", toggleFaxAuto, true, "Save at the stop tone: %s", fax_auto ? "on" : "off");
         addAct("C", clearFaxPicture, false, "Clear and start a new picture");
         addAct("", alignFax, false, "Align the picture again");
+        addAct("P", openFaxList, false, "Saved pictures");
+        break;
+    case Mode::SSTV:
+        addAct("Enter", saveSstvNow, false, "Save the picture now (%d lines)", sstv_have);
+        addAct("A", toggleSstvAuto, true, "Save every finished picture: %s", sstv_auto ? "on" : "off");
+        if (engine::sstvState().receiving) {
+            addAct("X", stopSstv, false, "Stop receiving this picture");
+        }
+        addAct("", nextSstvFormat, true, "If the beginning was missed: %s", engine::sstvFormatName(sstv_manual));
+        addAct("M", startSstvByHand, false, "Receive now as %s", engine::sstvFormatName(sstv_manual));
+        addAct("C", clearSstvNow, false, "Clear the picture");
         addAct("P", openFaxList, false, "Saved pictures");
         break;
     }
@@ -2069,7 +2482,8 @@ void overlayKey(char c)
 /// The message strip of the screens that have no line at the bottom.
 void drawNoticeBar()
 {
-    bool wanted = noticeActive() && (screen == Screen::Text || screen == Screen::Fax || screen == Screen::FaxView || screen == Screen::FaxList);
+    bool wanted = noticeActive() && (screen == Screen::Text || screen == Screen::Fax || screen == Screen::Sstv || screen == Screen::FaxView ||
+                                     screen == Screen::FaxList);
     if (wanted) {
         lv_label_set_text(notice_bar, notice);
         lv_obj_remove_flag(notice_bar, LV_OBJ_FLAG_HIDDEN);
@@ -2142,6 +2556,7 @@ void pollInput()
         case Screen::Slot: slotRotate(dir); break;
         case Screen::Text: textRotate(dir); break;
         case Screen::Fax: engine::faxShift(dir * 16); break;
+        case Screen::Sstv: sstvRotate(dir); break;
         case Screen::Log:
             log_top += dir;
             drawLog();
@@ -2165,8 +2580,12 @@ void pollInput()
         case Screen::Slot:
         case Screen::Text:
         case Screen::Fax:
+        case Screen::Sstv:
         case Screen::FaxView: openOverlay(); break;
-        case Screen::Log: break;
+        case Screen::Log:
+            log_stats = !log_stats;
+            drawLog();
+            break;
         case Screen::Setup: setupPress(); break;
         case Screen::Band: closeBand(true); break;
         case Screen::FaxList: openFaxView(); break;
@@ -2189,6 +2608,7 @@ void pollInput()
         case Screen::Slot: slotKey(c); break;
         case Screen::Text: textKey(c); break;
         case Screen::Fax: faxKey(c); break;
+        case Screen::Sstv: sstvKey(c); break;
         case Screen::Log:
             if (c == 0x08) {
                 backFromSub();
@@ -2198,7 +2618,7 @@ void pollInput()
         case Screen::Band: bandKey(c); break;
         case Screen::FaxList:
             if (c == 0x08) {
-                openMode(Mode::WEFAX);
+                openMode(engine::mode());
             } else if (c == '\n' || c == '\r') {
                 openFaxView();
             }
@@ -2278,6 +2698,7 @@ void begin()
     buildSlot();
     buildText();
     buildFax();
+    buildSstv();
     buildSetup();
     buildBand();
     buildFaxPages();
@@ -2336,6 +2757,7 @@ void loop()
         received = true;
     }
     processFax();
+    processSstv();
     pollPower(st, received);
 
     updateGridFromGps();
@@ -2350,6 +2772,7 @@ void loop()
         case Screen::Slot: drawSlot(); break;
         case Screen::Text: drawText(); break;
         case Screen::Fax: drawFax(); break;
+        case Screen::Sstv: drawSstv(); break;
         default: break;
         }
         drawNoticeBar();

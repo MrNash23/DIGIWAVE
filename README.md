@@ -6,7 +6,7 @@
 
 <p align="center">
   Firmware for the <a href="https://lilygo.cc/products/t-lora-pager">LilyGo T-LoRa Pager</a>:
-  FT8, FT4, CW, RTTY, NAVTEX and WEFAX on a device that fits in a jacket pocket.
+  FT8, FT4, CW, RTTY, NAVTEX, WEFAX and SSTV on a device that fits in a jacket pocket.
 </p>
 
 <p align="center">
@@ -27,6 +27,7 @@ and keys the radio. No computer is involved.
     <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_rtty_64x64.png" width="64"><br><b>RTTY</b></td>
     <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_navtex_64x64.png" width="64"><br><b>NAVTEX</b></td>
     <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_wefax_64x64.png" width="64"><br><b>WEFAX</b></td>
+    <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_sstv_64x64.png" width="64"><br><b>SSTV</b></td>
   </tr>
 </table>
 
@@ -37,12 +38,20 @@ and keys the radio. No computer is involved.
 | RTTY (45.45 / 50 baud) | yes | yes |
 | NAVTEX | yes | - |
 | WEFAX (120 LPM) | yes, saved as BMP on the SD card | - |
+| SSTV (Martin 1/2, Scottie 1/2, Robot 36, PD 120/180) | yes, in colour, saved as BMP on the SD card | - |
 
 ### Features
 
 - **Waterfall** under the decodes in FT8, FT4, CW, RTTY and NAVTEX
 - **Full FT8/FT4 contacts**: call CQ or answer a station with one press; the
   sequence runs by itself and the contact is written to an ADIF logbook on the SD card
+- **Worked before**: stations already in the logbook of the device are greyed
+  out in the list, on this band or only on another one
+- **CQ with an addition** (POTA, SOTA, DX, QRP ...), **distance** to every
+  station heard, and **figures over the logbook**: QSOs per band and mode,
+  countries, farthest contact
+- **Weather by RTTY**: the frequencies of the German weather service DWD are in
+  the RTTY list; choosing one sets speed and shift
 - **CB (11 m) operation** for FT8 and FT4: CB callsigns such as `26AT016`, the
   message sequence of WSJT-CB and the country list by division number
 - **The own contact at a glance**: what is sent appears in the list with what
@@ -76,10 +85,11 @@ already keeps audio and PTT behind interfaces for it.
 
 Work in progress.
 
-- The signal processing of all modes is covered by 42 host tests.
+- The signal processing of all modes is covered by 47 host tests.
 - On the device, FT8 reception has been checked against real signals; a slot is
   decoded in about 0.7 s.
-- NAVTEX and WEFAX have only been tested against generated signals.
+- NAVTEX and SSTV have only been tested against generated signals; WEFAX has
+  received real weather charts.
 - Transmitting has not been tested on air yet.
 
 ## Installing

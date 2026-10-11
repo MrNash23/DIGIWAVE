@@ -1,3 +1,4 @@
+#include <math.h>
 #include "ft8_adif.h"
 
 #include <ctype.h>
@@ -95,6 +96,44 @@ bool gridFromLatLon(double lat, double lon, char *out)
     return true;
 }
 
+namespace {
+
+/// Middle of a locator in degrees. Returns false if it is not one.
+bool gridCentre(const char *g, double *lat, double *lon)
+{
+    size_t n = strlen(g);
+    // "RR73" has the form of a locator but is the end of a contact
+    if (n < 4 || strcmp(g, "RR73") == 0 || toupper((unsigned char)g[0]) < 'A' || toupper((unsigned char)g[0]) > 'R' || toupper((unsigned char)g[1]) < 'A' ||
+        toupper((unsigned char)g[1]) > 'R' || !isdigit((unsigned char)g[2]) || !isdigit((unsigned char)g[3])) {
+        return false;
+    }
+    *lon = (toupper((unsigned char)g[0]) - 'A') * 20.0 - 180.0 + (g[2] - '0') * 2.0;
+    *lat = (toupper((unsigned char)g[1]) - 'A') * 10.0 - 90.0 + (g[3] - '0') * 1.0;
+    char a = n >= 6 ? (char)toupper((unsigned char)g[4]) : 0, b = n >= 6 ? (char)toupper((unsigned char)g[5]) : 0;
+    if (a >= 'A' && a <= 'X' && b >= 'A' && b <= 'X') {
+        *lon += (a - 'A') * (2.0 / 24) + 1.0 / 24;
+        *lat += (b - 'A') * (1.0 / 24) + 0.5 / 24;
+    } else {
+        *lon += 1.0;
+        *lat += 0.5;
+    }
+    return true;
+}
+
+}  // namespace
+
+int gridDistanceKm(const char *a, const char *b)
+{
+    double lat1, lon1, lat2, lon2;
+    if (!gridCentre(a, &lat1, &lon1) || !gridCentre(b, &lat2, &lon2)) {
+        return -1;
+    }
+    const double rad = 3.14159265358979 / 180;
+    double dlat = (lat2 - lat1) * rad, dlon = (lon2 - lon1) * rad;
+    double h = sin(dlat / 2) * sin(dlat / 2) + cos(lat1 * rad) * cos(lat2 * rad) * sin(dlon / 2) * sin(dlon / 2);
+    return (int)(2 * 6371.0 * asin(sqrt(h)) + 0.5);
+}
+
 const char *bandName(uint32_t khz)
 {
     for (const Band &b : kBands) {
@@ -145,6 +184,12 @@ size_t formatAdif(const QsoRecord &rec, const QsoConfig &cfg, uint32_t dial_hz, 
         char freq[16];
         snprintf(freq, sizeof(freq), "%.6f", (dial_hz + (double)rec.audio_freq) / 1e6);
         pos = field(out, out_size, pos, "freq", freq);
+    }
+    int km = gridDistanceKm(cfg.my_grid, rec.dx_grid);
+    if (km >= 0) {
+        char distance[8];
+        snprintf(distance, sizeof(distance), "%d", km);
+        pos = field(out, out_size, pos, "distance", distance);
     }
     pos = field(out, out_size, pos, "station_callsign", cfg.my_call);
     pos = field(out, out_size, pos, "my_gridsquare", cfg.my_grid);

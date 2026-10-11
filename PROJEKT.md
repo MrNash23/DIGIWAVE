@@ -20,6 +20,7 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
 | RTTY (45,45 / 50 Baud) | ja | ja |
 | NAVTEX | ja | – |
 | WEFAX (120 LPM) | ja, Bilder als BMP auf der SD-Karte | – |
+| SSTV (Martin 1/2, Scottie 1/2, Robot 36, PD 120/180) | ja, in Farbe, Bilder als BMP auf der SD-Karte | – |
 
 ## Funktionen
 
@@ -29,6 +30,11 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
   beantworten; das Logbuch liegt als ADIF auf der SD-Karte (`/digiwave.adi`)
 - CB-Betrieb (11 m) für FT8/FT4 nach den Regeln von WSJT-CB: CB-Rufzeichen wie
   `26AT016`, eigene Nachrichtenfolge, Länderliste nach Divisionsnummer
+- „Schon gearbeitet": Stationen aus dem Logbuch des Geräts erscheinen in der
+  Liste grau (dieses Band) bzw. gedämpft (nur anderes Band)
+- CQ mit Zusatz (POTA, SOTA, DX ...), Entfernung zu jeder gehörten Station,
+  Kennzahlen zum Logbuch (je Band und Betriebsart, Länder, weiteste Verbindung)
+- DWD-Wetterfunk über RTTY: Frequenzwahl stellt Tempo und Shift passend ein
 - Einheitliche Bedienung: Rad wählt oder stimmt ab, Rad-Druck öffnet in jeder
   Betriebsart die Liste ihrer Funktionen (mit Kurztasten), Enter ist die
   Hauptaktion, Backspace geht eine Ebene zurück bis ins Menü
@@ -51,7 +57,7 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
 
 - `lib/ft8core` – Signalverarbeitung ohne Hardwarebezug: Dekoder, Encoder,
   QSO-Ablauf, ADIF, Länder- und CB-Tabellen, CW, FSK-Modem, RTTY, NAVTEX, WEFAX.
-  Läuft auch auf dem Mac und wird dort getestet (42 Tests, `pio test -e native`)
+  Läuft auch auf dem Mac und wird dort getestet (47 Tests, `pio test -e native`)
 - `lib/ft8_lib` – übernommene Bibliothek von Karlis Goba (MIT) für die
   FT8/FT4-Codierung
 - `src` – Firmware: `engine` (Empfangs- und Sendetask für alle Betriebsarten),
@@ -73,7 +79,7 @@ Meshtastic) und wird über den Launcher von bmorcelli gestartet.
 
 - FT8-Empfang ist am Gerät mit echten Signalen geprüft; ein Zeitschlitz wird in
   etwa 0,7 s dekodiert.
-- NAVTEX und WEFAX sind bisher nur mit erzeugten Signalen getestet.
+- NAVTEX und SSTV sind bisher nur mit erzeugten Signalen getestet; WEFAX hat echte Wetterkarten empfangen.
 - Senden ist in keiner Betriebsart auf dem Band getestet.
 - Audio läuft vorerst über Mikrofon und Lautsprecher des Pagers.
 

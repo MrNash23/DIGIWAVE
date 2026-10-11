@@ -1,5 +1,6 @@
 #include "settings.h"
 
+#include <Arduino.h>
 #include <Preferences.h>
 
 Settings settings;
@@ -25,6 +26,7 @@ void Settings::load()
     dial_rtty_hz = p.getUInt("dialry", dial_rtty_hz);
     dial_navtex_hz = p.getUInt("dialnx", dial_navtex_hz);
     dial_wefax_hz = p.getUInt("dialwf", dial_wefax_hz);
+    dial_sstv_hz = p.getUInt("dialsv", dial_sstv_hz);
     tx_hz = p.getInt("txhz", tx_hz);
     tx_level = p.getInt("txlvl", tx_level);
     volume = p.getInt("vol", volume);
@@ -47,6 +49,7 @@ void Settings::load()
     navtex_center = p.getInt("nxctr", navtex_center);
     navtex_reverse = p.getBool("nxrev", navtex_reverse);
     sleep_min = p.getInt("sleep", sleep_min);
+    cq_tag = constrain(p.getInt("cqtag", cq_tag), 0, kCqTagCount - 1);
     last_mode = p.getInt("mode", last_mode);
     p.end();
 }
@@ -67,6 +70,7 @@ void Settings::save() const
     p.putUInt("dialry", dial_rtty_hz);
     p.putUInt("dialnx", dial_navtex_hz);
     p.putUInt("dialwf", dial_wefax_hz);
+    p.putUInt("dialsv", dial_sstv_hz);
     p.remove("dial");
     p.putInt("txhz", tx_hz);
     p.putInt("txlvl", tx_level);
@@ -90,6 +94,7 @@ void Settings::save() const
     p.putInt("nxctr", navtex_center);
     p.putBool("nxrev", navtex_reverse);
     p.putInt("sleep", sleep_min);
+    p.putInt("cqtag", cq_tag);
     p.putInt("mode", last_mode);
     p.end();
 }

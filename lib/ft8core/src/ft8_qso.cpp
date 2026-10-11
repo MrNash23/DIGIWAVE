@@ -233,7 +233,11 @@ Packing Qso::buildMessage(char *text) const
 
     switch (_state) {
     case State::CallingCq:
-        snprintf(text, 36, "CQ %s %s", me, _cfg.my_grid);
+        if (_cfg.cq_tag[0] != '\0') {
+            snprintf(text, 36, "CQ %s %s %s", _cfg.cq_tag, me, _cfg.my_grid);
+        } else {
+            snprintf(text, 36, "CQ %s %s", me, _cfg.my_grid);
+        }
         break;
     case State::Calling:
         snprintf(text, 36, "%s %s %s", dx, me, _cfg.my_grid);

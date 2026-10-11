@@ -60,6 +60,12 @@ const BandPreset kWefax[] = {
     {"Northwood", 11086500, ""},
 };
 
+// Where slow-scan pictures are usually sent; the space station answers in FM
+const BandPreset kSstv[] = {
+    {"80 m", 3735000, ""},  {"40 m", 7171000, ""},     {"20 m", 14230000, ""},          {"15 m", 21340000, ""},
+    {"10 m", 28680000, ""}, {"2 m", 144500000, "FM"},  {"Space station", 145800000, "FM"},
+};
+
 struct List {
     const BandPreset *items;
     int count;
@@ -79,9 +85,10 @@ List listFor(BandUse use, bool cb)
     case BandUse::CW: return listOf(kCw);
     case BandUse::RTTY: return listOf(kRtty);
     case BandUse::NAVTEX: return listOf(kNavtex);
-    case BandUse::WEFAX: break;
+    case BandUse::WEFAX: return listOf(kWefax);
+    case BandUse::SSTV: break;
     }
-    return listOf(kWefax);
+    return listOf(kSstv);
 }
 
 }  // namespace

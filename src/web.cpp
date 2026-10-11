@@ -5,6 +5,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#include <ft8_adif.h>
+
 #include "assets/assets.h"
 #include "engine.h"
 #include "logbook.h"
@@ -49,7 +51,7 @@ h2{font-size:14px;color:#8a8f99;margin:18px 0 6px;font-weight:600}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 td{padding:7px 4px;border-bottom:1px solid #22252b;white-space:nowrap}
 td.m{white-space:normal;width:100%}
-tr.cq td.m{color:#00f5f8}tr.me td.m{color:#ff1ed7}tr.own td{color:#ffd23c;background:#2a2408}
+tr.cq td.m{color:#00f5f8}tr.me td.m{color:#ff1ed7}tr.own td{color:#ffd23c;background:#2a2408}tr.w2 td.m{color:#5c5c5c}tr.w1 td.m{color:#7fa0b8}
 td.n{text-align:right;color:#8a8f99}
 label{display:block;margin:8px 0 2px;color:#8a8f99;font-size:13px}
 input[type=text],input[type=number]{font:inherit;width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid #3a3e47;background:#16181c;color:inherit}
@@ -81,7 +83,7 @@ a{color:#00f5f8}
 <div style="flex:0"><button type="submit">Send</button></div></div></form>
 </section>
 <section id="pfax">
-<h2>WEFAX pictures on the SD card</h2>
+<h2 id="faxhead">Pictures on the SD card</h2>
 <div id="faxlist" class="dim">none yet</div>
 <canvas id="faxcv" class="hide" style="width:100%;margin-top:8px;image-rendering:pixelated"></canvas>
 </section>
@@ -106,27 +108,31 @@ async function post(url,data){
   const t=await r.text();note(t);poll();
 }
 function cmd(c){post('/api/cmd',{c})}
-function setMode(m){post('/api/mode',{m})}
+function setMode(m){faxAt=0;$('faxcv').className='hide';post('/api/mode',{m})}
 function sendText(e){e.preventDefault();const t=$('tosend').value;if(t){post('/api/send',{t});$('tosend').value=''}}
 let faxAt=0;
+const picDir=()=>S&&S.mode==6?'sstv':'wefax';
 async function loadFax(){
-  try{const l=await (await fetch('/api/fax')).json();const d=$('faxlist');
+  try{const l=await (await fetch('/api/fax?d='+picDir())).json();const d=$('faxlist');
+    $('faxhead').textContent=(picDir()=='sstv'?'SSTV':'WEFAX')+' pictures on the SD card';
     if(!l.length){d.textContent='none yet';return}
     d.textContent='';d.className='';
     for(const n of l.sort().reverse()){const p=document.createElement('p');
       const v=document.createElement('button');v.textContent=n;v.onclick=()=>showFax(n);p.appendChild(v);
-      const a=document.createElement('a');a.href='/fax?f='+encodeURIComponent(n);a.textContent=' download ';a.download=n;p.appendChild(a);
-      const x=document.createElement('button');x.textContent='Delete';x.onclick=async()=>{if(confirm('Delete '+n+'?')){await post('/api/faxdelete',{f:n});$('faxcv').className='hide';loadFax()}};p.appendChild(x);
+      const a=document.createElement('a');a.href='/fax?d='+picDir()+'&f='+encodeURIComponent(n);a.textContent=' download ';a.download=n;p.appendChild(a);
+      const x=document.createElement('button');x.textContent='Delete';x.onclick=async()=>{if(confirm('Delete '+n+'?')){await post('/api/faxdelete',{f:n,d:picDir()});$('faxcv').className='hide';loadFax()}};p.appendChild(x);
       d.appendChild(p)}
   }catch(e){}
 }
 // The picture is drawn here from its bytes, so that it shows whatever the browser thinks of BMP files
 async function showFax(n){
-  const b=new Uint8Array(await (await fetch('/fax?f='+encodeURIComponent(n))).arrayBuffer());
-  const dv=new DataView(b.buffer),off=dv.getUint32(10,true),w=dv.getInt32(18,true);
-  const h=Math.floor((b.length-off)/w);if(!(w>0&&h>0))return;
+  const b=new Uint8Array(await (await fetch('/fax?d='+picDir()+'&f='+encodeURIComponent(n))).arrayBuffer());
+  const dv=new DataView(b.buffer),off=dv.getUint32(10,true),w=dv.getInt32(18,true),bpp=dv.getUint16(28,true);
+  const h=Math.floor((b.length-off)/(w*bpp/8));if(!(w>0&&h>0))return;
   const c=$('faxcv');c.width=w;c.height=h;const g=c.getContext('2d'),im=g.createImageData(w,h);
-  for(let i=0;i<w*h;i++){const v=b[off+i];im.data[4*i]=im.data[4*i+1]=im.data[4*i+2]=v;im.data[4*i+3]=255}
+  if(bpp==24){ // colour, rows from the bottom up, blue first
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){const s=off+((h-1-y)*w+x)*3,t=4*(y*w+x);im.data[t]=b[s+2];im.data[t+1]=b[s+1];im.data[t+2]=b[s];im.data[t+3]=255}
+  }else for(let i=0;i<w*h;i++){const v=b[off+i];im.data[4*i]=im.data[4*i+1]=im.data[4*i+2]=v;im.data[4*i+3]=255}
   g.putImageData(im,0,0);c.className='';c.scrollIntoView()
 }
 function save(e){e.preventDefault();post('/api/settings',{call:$('call').value,grid:$('grid').value,
@@ -136,7 +142,7 @@ function render(){
   const ms=$('modes');
   if(!ms.children.length)S.modes.forEach((n,i)=>{const b=document.createElement('button');b.textContent=n;b.onclick=()=>setMode(i);ms.appendChild(b)});
   [...ms.children].forEach((b,i)=>b.className=i==S.mode?'sel':'');
-  const slot=S.mode<2,text=S.mode>=2&&S.mode<=4,fax=S.mode==5;
+  const slot=S.mode<2,text=S.mode>=2&&S.mode<=4,fax=S.mode>=5;
   $('pslot').className=slot?'':'hide';$('ptext').className=text?'':'hide';$('pfax').className=fax?'':'hide';
   document.querySelectorAll('.slot').forEach(b=>b.style.display=slot?'':'none');
   $('sendform').className=S.cansend?'':'hide';
@@ -153,7 +159,7 @@ function render(){
     $('dial').value=S.dial;$('txhz').value=S.txhz}
   const tb=$('list');tb.textContent='';
   for(const h of S.hist.slice().reverse()){
-    const tr=document.createElement('tr');tr.className=h.own?'own':(h.me?'me':(h.cq?'cq':''));
+    const tr=document.createElement('tr');tr.className=h.own?'own':(h.me?'me':(h.w?'w'+h.w:(h.cq?'cq':'')));
     for(const [c,v] of [['',h.t],['n',h.own?'TX':(h.snr>=0?'+':'')+h.snr],['n',h.f],['m',h.m],['n',(h.g+(h.c?' ('+h.c+')':'')).trim()]]){
       const td=document.createElement('td');td.className=c;td.textContent=v;tr.appendChild(td)}
     if(h.de&&!h.own)tr.onclick=()=>answer(h);
@@ -236,12 +242,15 @@ void handleState()
              settings.grid_auto ? "true" : "false", settings.dialHz((int)engine::mode()) / 1000.0, settings.tx_hz,
              logbook::total());
     out += buf;
+    const char *band_name = ft8::bandName(settings.dialHz((int)st.mode) / 1000);
+    const char *band = band_name ? band_name : "";
     for (int i = 0; i < n; ++i) {
         const engine::Entry &e = hist[i];
         uint32_t t = e.slot_utc;
-        snprintf(buf, sizeof(buf), "%s{\"t\":\"%02u%02u%02u\",\"slot\":%u,\"snr\":%d,\"f\":%d,\"cq\":%s,\"me\":%s,\"own\":%s,\"de\":",
+        snprintf(buf, sizeof(buf), "%s{\"t\":\"%02u%02u%02u\",\"slot\":%u,\"snr\":%d,\"f\":%d,\"cq\":%s,\"me\":%s,\"own\":%s,\"w\":%d,\"de\":",
                  i ? "," : "", (unsigned)(t / 3600 % 24), (unsigned)(t / 60 % 60), (unsigned)(t % 60), (unsigned)t, e.msg.snr,
-                 (int)e.msg.freq, e.msg.is_cq ? "true" : "false", e.to_me ? "true" : "false", e.own ? "true" : "false");
+                 (int)e.msg.freq, e.msg.is_cq ? "true" : "false", e.to_me ? "true" : "false", e.own ? "true" : "false",
+                 e.own || e.msg.call_de[0] == '\0' ? 0 : logbook::worked(e.msg.call_de, band));
         out += buf;
         appendJsonString(out, e.msg.call_de);
         out += ",\"g\":";
@@ -383,12 +392,18 @@ void handleSend()
     server.send(200, "text/plain", ui::submitText(t.c_str()) ? "Sending" : "This mode cannot send text");
 }
 
+/// The pictures of WEFAX, or with d=sstv those of SSTV.
+const char *picDir()
+{
+    return server.arg("d") == "sstv" ? ui::kSstvDir : ui::kFaxDir;
+}
+
 void handleFaxList()
 {
     String out = "[";
     instance.lockSPI();
     if (SD.cardType() != CARD_NONE) {
-        File dir = SD.open(ui::kFaxDir);
+        File dir = SD.open(picDir());
         if (dir && dir.isDirectory()) {
             for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
                 if (!f.isDirectory() && out.length() < 4000) {
@@ -415,7 +430,7 @@ void handleFax()
         server.send(400, "text/plain", "Bad file name");
         return;
     }
-    String path = String(ui::kFaxDir) + "/" + name;
+    String path = String(picDir()) + "/" + name;
     instance.lockSPI();
     File f;
     if (SD.cardType() != CARD_NONE && SD.exists(path)) {
@@ -438,7 +453,7 @@ void handleFaxDelete()
         server.send(400, "text/plain", "Bad file name");
         return;
     }
-    String path = String(ui::kFaxDir) + "/" + name;
+    String path = String(picDir()) + "/" + name;
     instance.lockSPI();
     bool ok = SD.cardType() != CARD_NONE && SD.remove(path);
     instance.unlockSPI();

@@ -26,6 +26,9 @@ struct QsoConfig {
     //   CQ ME   <DX> ME   DX -NN   DX R-NN   DX RR73   DX 73
     // The last four are free text and name only the station addressed.
     bool cb_mode = false;
+    // Up to four letters sent after CQ ("CQ POTA DL1ABC JO62"), empty for a plain CQ.
+    // Not used in CB operation, whose CQ has no room for it.
+    char cq_tag[5] = "";
 };
 
 /// Auto-sequencer for standard FT8 QSOs, following the WSJT-X message order:

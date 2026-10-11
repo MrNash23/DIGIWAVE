@@ -5,7 +5,7 @@
 namespace ft8 {
 
 /// What the list of frequencies is for; the order is that of the modes of the firmware.
-enum class BandUse { FT8, FT4, CW, RTTY, NAVTEX, WEFAX };
+enum class BandUse { FT8, FT4, CW, RTTY, NAVTEX, WEFAX, SSTV };
 
 /// A frequency where a mode is usually found, or a station to listen to. The
 /// radio is tuned by hand, so these are offered for telling the device (and

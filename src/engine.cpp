@@ -9,6 +9,7 @@
 #include <ft8_hashtable.h>
 #include <navtex_decoder.h>
 #include <rtty_codec.h>
+#include <sstv.h>
 #include <wefax_decoder.h>
 
 extern "C" {
@@ -42,6 +43,10 @@ digi::RttyDecoder rtty_rx;
 digi::RttyEncoder rtty_tx;
 digi::NavtexDecoder navtex_rx;
 digi::WefaxDecoder fax_rx;
+digi::SstvDecoder sstv_rx;
+QueueHandle_t sstv_line_queue, sstv_event_queue;
+SstvState sstv_st{};
+volatile int sstv_start_request = -1;  // format to start by hand, -2 to stop
 
 // Guarded by lock
 Entry hist[kHistory];
@@ -579,6 +584,55 @@ void stepFax(int16_t *pcm)
     }
 }
 
+// --- SSTV ----------------------------------------------------------------------------
+
+void onSstvLine(int line, const uint8_t *rgb, void *)
+{
+    static SstvLine out;
+    out.line = (int16_t)line;
+    for (int x = 0; x < kSstvWidth; ++x) {
+        out.pixels[x] = (uint16_t)(((rgb[3 * x] & 0xF8) << 8) | ((rgb[3 * x + 1] & 0xFC) << 3) | (rgb[3 * x + 2] >> 3));
+    }
+    xQueueSend(sstv_line_queue, &out, 0);
+}
+
+void stepSstv(int16_t *pcm)
+{
+    if (!readChunk(pcm)) {
+        return;
+    }
+    int request = sstv_start_request;
+    if (request != -1) {
+        sstv_start_request = -1;
+        if (request == -2) {
+            sstv_rx.stop();
+        } else {
+            sstv_rx.start((digi::SstvMode)(request + 1));
+        }
+    }
+    sstv_rx.feed(pcm, kChunk);
+    SstvEvent event = SstvEvent::None;
+    switch (sstv_rx.takeEvent()) {
+    case digi::SstvDecoder::Event::Start: event = SstvEvent::Start; break;
+    case digi::SstvDecoder::Event::End: event = SstvEvent::End; break;
+    default: break;
+    }
+    {
+        Guard g;
+        digi::SstvMode m = sstv_rx.mode();
+        sstv_st.receiving = m != digi::SstvMode::None;
+        if (sstv_st.receiving) {
+            strncpy(sstv_st.format, digi::sstvInfo(m).name, sizeof(sstv_st.format) - 1);
+            sstv_st.lines = digi::sstvInfo(m).lines;
+            sstv_st.line = sstv_rx.line();
+        }
+        st.locked = sstv_st.receiving;
+    }
+    if (event != SstvEvent::None) {
+        xQueueSend(sstv_event_queue, &event, 0);
+    }
+}
+
 // --- task ----------------------------------------------------------------------------
 
 void enterMode(Mode m, bool mode_changed)
@@ -626,6 +680,17 @@ void enterMode(Mode m, bool mode_changed)
             fax_rx.onLine(onFaxLine, nullptr);
         }
         break;
+    case Mode::SSTV:
+        if (mode_changed) {
+            if (!sstv_rx.begin()) {
+                Serial.println("[dw] SSTV: out of memory");
+            }
+            sstv_rx.onLine(onSstvLine, nullptr);
+            xQueueReset(sstv_line_queue);
+            Guard g;
+            sstv_st = SstvState{};
+        }
+        break;
     }
     if (mode_changed) {
         xQueueReset(rx_text_queue);
@@ -666,6 +731,8 @@ void task(void *)
             stepSlotMode(current, pcm);
         } else if (isTextMode(current)) {
             stepTextMode(current, pcm);
+        } else if (current == Mode::SSTV) {
+            stepSstv(pcm);
         } else {
             stepFax(pcm);
         }
@@ -676,7 +743,7 @@ void task(void *)
 
 const char *modeName(Mode m)
 {
-    static const char *const names[kModes] = {"FT8", "FT4", "CW", "RTTY", "NAVTEX", "WEFAX"};
+    static const char *const names[kModes] = {"FT8", "FT4", "CW", "RTTY", "NAVTEX", "WEFAX", "SSTV"};
     return names[(int)m];
 }
 
@@ -713,6 +780,13 @@ void begin(AudioIo &a, Ptt &p)
     fax_line_queue = fax_queue_store != nullptr ? xQueueCreateStatic(kFaxQueueLines, kFaxWidth, fax_queue_store, &fax_queue_state)
                                                 : xQueueCreate(6, kFaxWidth);
     fax_event_queue = xQueueCreate(4, sizeof(FaxEvent));
+    // Lines of a colour picture, likewise for while the main loop is busy
+    constexpr int kSstvQueueLines = 128;
+    static StaticQueue_t sstv_queue_state;
+    uint8_t *sstv_queue_store = (uint8_t *)ps_malloc((size_t)kSstvQueueLines * sizeof(SstvLine));
+    sstv_line_queue = sstv_queue_store != nullptr ? xQueueCreateStatic(kSstvQueueLines, sizeof(SstvLine), sstv_queue_store, &sstv_queue_state)
+                                                  : xQueueCreate(4, sizeof(SstvLine));
+    sstv_event_queue = xQueueCreate(4, sizeof(SstvEvent));
     if (!spectrum.begin()) {
         Serial.println("[dw] spectrum: out of memory");
     }
@@ -731,6 +805,7 @@ void applySettings()
     strncpy(qc.my_grid, settings.grid, sizeof(qc.my_grid) - 1);
     qc.max_retries = settings.max_retries;
     qc.max_cq = settings.max_cq;
+    strncpy(qc.cq_tag, kCqTags[constrain(settings.cq_tag, 0, kCqTagCount - 1)], sizeof(qc.cq_tag) - 1);
     qc.cb_mode = settings.cb_mode;
     qso.configure(qc);
     cfg.cb_mode = settings.cb_mode;
@@ -954,6 +1029,39 @@ void faxShift(int pixels)
 void faxRephase()
 {
     fax_rephase_request = true;
+}
+
+bool nextSstvLine(SstvLine *out)
+{
+    return xQueueReceive(sstv_line_queue, out, 0) == pdTRUE;
+}
+
+SstvEvent nextSstvEvent()
+{
+    SstvEvent e = SstvEvent::None;
+    xQueueReceive(sstv_event_queue, &e, 0);
+    return e;
+}
+
+SstvState sstvState()
+{
+    Guard g;
+    return sstv_st;
+}
+
+void sstvStart(int format)
+{
+    sstv_start_request = constrain(format, 0, kSstvFormats - 1);
+}
+
+void sstvStop()
+{
+    sstv_start_request = -2;
+}
+
+const char *sstvFormatName(int format)
+{
+    return digi::sstvInfo((digi::SstvMode)(constrain(format, 0, kSstvFormats - 1) + 1)).name;
 }
 
 }  // namespace engine

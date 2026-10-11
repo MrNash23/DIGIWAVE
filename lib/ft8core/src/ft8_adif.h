@@ -23,6 +23,10 @@ bool adifField(const char *record, const char *name, char *out, size_t out_size)
 /// out must hold 5 bytes. Returns false for coordinates outside the globe.
 bool gridFromLatLon(double lat, double lon, char *out);
 
+/// Distance in km between the middles of two locators (4 or 6 characters),
+/// or -1 if one of them is not a locator.
+int gridDistanceKm(const char *a, const char *b);
+
 /// ADIF band name for a frequency in kHz ("20m"), or nullptr outside the amateur HF/VHF bands.
 const char *bandName(uint32_t khz);
 

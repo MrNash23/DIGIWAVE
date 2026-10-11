@@ -12,8 +12,8 @@
 /// the audio path. Everything here may be called from the UI thread.
 namespace engine {
 
-enum class Mode { FT8, FT4, CW, RTTY, NAVTEX, WEFAX };
-constexpr int kModes = 6;
+enum class Mode { FT8, FT4, CW, RTTY, NAVTEX, WEFAX, SSTV };
+constexpr int kModes = 7;
 
 const char *modeName(Mode m);
 bool isSlotMode(Mode m);   // FT8, FT4
@@ -141,5 +141,34 @@ void faxShift(int pixels);
 
 /// Lets the receiver align itself to the next phasing signal again.
 void faxRephase();
+
+// --- SSTV --------------------------------------------------------------------------
+
+constexpr int kSstvWidth = 320;
+constexpr int kSstvMaxLines = 496;
+constexpr int kSstvFormats = 7;  // formats that can be chosen by hand, see sstvFormatName()
+
+struct SstvLine {
+    int16_t line;
+    uint16_t pixels[kSstvWidth];  // RGB565
+};
+
+struct SstvState {
+    bool receiving;
+    char format[12];   // of the picture being received or received last
+    int line, lines;
+};
+
+/// Fetches the next picture line. Returns false if none is waiting.
+bool nextSstvLine(SstvLine *out);
+
+enum class SstvEvent { None, Start, End };
+SstvEvent nextSstvEvent();
+SstvState sstvState();
+
+/// Receives a picture whose header was missed, in the given format (0..kSstvFormats-1).
+void sstvStart(int format);
+void sstvStop();
+const char *sstvFormatName(int format);
 
 }  // namespace engine

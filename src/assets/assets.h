@@ -15,6 +15,7 @@ extern const lv_image_dsc_t img_tile_cw;  // 86 x 86
 extern const lv_image_dsc_t img_tile_rtty;  // 86 x 86
 extern const lv_image_dsc_t img_tile_navtex;  // 86 x 86
 extern const lv_image_dsc_t img_tile_wefax;  // 86 x 86
+extern const lv_image_dsc_t img_tile_sstv;  // 86 x 86
 extern const lv_image_dsc_t img_tile_logbook;  // 86 x 86
 extern const lv_image_dsc_t img_tile_setup;  // 86 x 86
 extern const lv_image_dsc_t img_tile_wifi;  // 86 x 86

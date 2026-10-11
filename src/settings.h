@@ -17,6 +17,7 @@ struct Settings {
     uint32_t dial_rtty_hz = 14085000;
     uint32_t dial_navtex_hz = 518000;   // of the station; the radio is tuned lower by the audio centre
     uint32_t dial_wefax_hz = 7880000;   // of the station; the radio is tuned 1.9 kHz lower
+    uint32_t dial_sstv_hz = 14230000;
 
     /// The frequency that applies to a mode (0..5, see engine::Mode) in the current kind of operation.
     uint32_t &dialHz(int mode)
@@ -27,7 +28,8 @@ struct Settings {
         case 2: return dial_cw_hz;
         case 3: return dial_rtty_hz;
         case 4: return dial_navtex_hz;
-        default: return dial_wefax_hz;
+        case 5: return dial_wefax_hz;
+        default: return dial_sstv_hz;
         }
     }
     int tx_hz = 1500;           // audio frequency of the lowest tone
@@ -51,10 +53,15 @@ struct Settings {
     int navtex_center = 1000;
     bool navtex_reverse = false;
     int sleep_min = 3;          // sleep after this time without input and reception, 0 = never
+    int cq_tag = 0;             // addition to the CQ call, index into kCqTags
     int last_mode = 0;          // engine::Mode active at power-off
 
     void load();
     void save() const;
 };
+
+/// What can follow CQ; the first entry is the plain call.
+constexpr const char *kCqTags[] = {"", "DX", "POTA", "SOTA", "QRP", "TEST", "EU", "NA"};
+constexpr int kCqTagCount = sizeof(kCqTags) / sizeof(kCqTags[0]);
 
 extern Settings settings;

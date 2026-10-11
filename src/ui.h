@@ -23,5 +23,6 @@ unsigned saveFaxNowForTest();
 
 /// Saved WEFAX pictures are in this directory on the SD card.
 extern const char kFaxDir[];
+extern const char kSstvDir[];
 
 }  // namespace ui
