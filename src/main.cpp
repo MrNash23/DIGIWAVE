@@ -41,7 +41,7 @@ void setup()
 
 // Diagnostic commands over USB serial: "m 0".."m 5" selects a mode,
 // "s TEXT" sends text in CW or RTTY, "r N" records N seconds of received
-// audio and prints it as hexadecimal 16-bit samples, "g 1" prints the state of
+// audio and prints it as hexadecimal 16-bit samples, "f 1" saves the WEFAX picture received so far, "g 1" prints the state of
 // GPS reception and of the clock, "n $GP..." feeds a GPS sentence to the clock.
 void pollSerialCommands()
 {
@@ -90,6 +90,13 @@ void pollSerialCommands()
                                   (unsigned)settings.dial_ft8_hz, (unsigned)settings.dial_ft4_hz, (unsigned)settings.dial_cb_ft8_hz,
                                   (unsigned)settings.dial_cb_ft4_hz, (unsigned)settings.dial_cw_hz, (unsigned)settings.dial_rtty_hz,
                                   (unsigned)settings.dial_navtex_hz, (unsigned)settings.dial_wefax_hz);
+                } else if (line[0] == 'f') {
+                    // Saves the WEFAX picture received so far and tells how long that took
+                    uint32_t t0 = millis();
+                    unsigned lines = ui::saveFaxNowForTest();
+                    Serial.printf("[fax] saved %u lines in %u ms; PSRAM free %u (lowest %u), internal free %u (lowest %u)\n", lines,
+                                  (unsigned)(millis() - t0), (unsigned)ESP.getFreePsram(), (unsigned)ESP.getMinFreePsram(),
+                                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
                 } else if (line[0] == 'r') {
                     engine::capture((size_t)constrain(atoi(line + 2), 1, 10) * 12000);
                     recording = true;

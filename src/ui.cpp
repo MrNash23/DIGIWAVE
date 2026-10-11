@@ -54,6 +54,8 @@ bool sub_from_app = false;  // a page opened from a mode returns to it, not to t
 void openBand();
 void openFaxList();
 void openOverlay();
+void drawNoticeBar();
+void clearText();
 void backFromSub();
 bool inApp();
 void modeWithFrequency(Mode m, char *out, size_t size);
@@ -756,6 +758,8 @@ void textKey(char c)
         }
     } else if (!can_send && tolower((unsigned char)c) == 'b') {
         openBand();
+    } else if (!can_send && tolower((unsigned char)c) == 'c') {
+        clearText();
     } else if (can_send && isprint((unsigned char)c) && n + 1 < sizeof(input)) {
         input[n] = (char)toupper((unsigned char)c);
         input[n + 1] = '\0';
@@ -773,11 +777,17 @@ Header fax_header;
 lv_obj_t *fax_canvas;
 lv_draw_buf_t *fax_buf;
 
-File fax_file;
-bool fax_saving = false;
-bool fax_auto = true;       // start and stop saving with the station's tones
+// Every received line is kept in memory, so that a picture can be saved as a
+// whole at any time - also the part that arrived before anyone decided to
+// keep it. kFaxKeep lines are half an hour at 120 lines per minute.
+constexpr uint32_t kFaxKeep = 3600;
+uint8_t *fax_ring = nullptr;     // kFaxKeep lines of kFaxWidth grey values, in PSRAM
+uint32_t fax_total = 0;          // lines received since the mode was entered
+uint32_t fax_begin = 0;          // where the current picture starts
+uint32_t fax_saved_to = 0;       // lines up to here are in a file already
+bool fax_auto = true;            // save a picture when the station's stop tone ends it
+bool fax_hold = false;           // reception paused: new lines are not taken
 char fax_name[40] = "";
-uint32_t fax_lines_saved = 0;
 uint32_t fax_line_count = 0;
 
 void putLe(uint8_t *p, uint32_t v, int bytes)
@@ -787,16 +797,15 @@ void putLe(uint8_t *p, uint32_t v, int bytes)
     }
 }
 
-/// 8-bit greyscale BMP, rows stored top to bottom so that lines can simply be appended.
+/// 8-bit greyscale BMP, rows stored top to bottom.
 void writeBmpHeader(File &f, uint32_t lines)
 {
-    const uint32_t data_offset = 14 + 40 + 256 * 4;
     const uint32_t image_size = lines * engine::kFaxWidth;  // the width needs no row padding
     uint8_t h[54] = {0};
     h[0] = 'B';
     h[1] = 'M';
-    putLe(h + 2, data_offset + image_size, 4);
-    putLe(h + 10, data_offset, 4);
+    putLe(h + 2, kBmpDataOffset + image_size, 4);
+    putLe(h + 10, kBmpDataOffset, 4);
     putLe(h + 14, 40, 4);
     putLe(h + 18, engine::kFaxWidth, 4);
     putLe(h + 22, (uint32_t)(-(int32_t)lines), 4);  // negative height: top-down
@@ -804,15 +813,32 @@ void writeBmpHeader(File &f, uint32_t lines)
     putLe(h + 28, 8, 2);
     putLe(h + 34, image_size, 4);
     putLe(h + 46, 256, 4);
-    f.seek(0);
     f.write(h, sizeof(h));
+    uint8_t pal[4];
+    for (int i = 0; i < 256; ++i) {
+        pal[0] = pal[1] = pal[2] = (uint8_t)i;
+        pal[3] = 0;
+        f.write(pal, 4);
+    }
 }
 
-void faxStartSaving()
+/// Lines of the current picture that are still in memory.
+uint32_t faxPictureLines()
 {
-    if (fax_saving) {
-        return;
+    return min(fax_total - fax_begin, kFaxKeep);
+}
+
+/// Writes the current picture, from its start to the line received last, to
+/// a new file. The whole picture is written in one go, so the file is complete
+/// or not there at all. Returns false if nothing was saved.
+bool saveFaxPicture()
+{
+    uint32_t lines = faxPictureLines();
+    if (fax_ring == nullptr || lines < 20) {
+        showNotice("No picture to save yet");
+        return false;
     }
+    uint32_t first = fax_total - lines;
     time_t secs = (time_t)(timebase::utcMs() / 1000);
     struct tm t;
     gmtime_r(&secs, &t);
@@ -826,37 +852,42 @@ void faxStartSaving()
     bool ok = SD.cardType() != CARD_NONE;
     if (ok) {
         SD.mkdir(kFaxDir);
-        fax_file = SD.open(path, FILE_WRITE);
-        ok = (bool)fax_file;
+        File f = SD.open(path, FILE_WRITE);
+        ok = (bool)f;
         if (ok) {
-            writeBmpHeader(fax_file, 0);
-            uint8_t pal[4];
-            for (int i = 0; i < 256; ++i) {
-                pal[0] = pal[1] = pal[2] = (uint8_t)i;
-                pal[3] = 0;
-                fax_file.write(pal, 4);
+            writeBmpHeader(f, lines);
+            // The lines lie in a ring; up to 32 of them go to the card at a time
+            for (uint32_t i = 0; i < lines && ok;) {
+                uint32_t slot = (first + i) % kFaxKeep;
+                uint32_t n = min(min(lines - i, kFaxKeep - slot), (uint32_t)32);
+                size_t bytes = (size_t)n * engine::kFaxWidth;
+                ok = f.write(fax_ring + (size_t)slot * engine::kFaxWidth, bytes) == bytes;
+                i += n;
+            }
+            f.close();
+            if (!ok) {
+                SD.remove(path);
             }
         }
     }
     instance.unlockSPI();
-    fax_saving = ok;
-    fax_lines_saved = 0;
-    showNotice(ok ? "Saving picture to SD card" : "Cannot save: SD card?");
+    char text[56];
+    if (ok) {
+        fax_saved_to = fax_total;
+        snprintf(text, sizeof(text), "Saved %u lines as %s", (unsigned)lines, fax_name);
+    } else {
+        snprintf(text, sizeof(text), "NOT saved - SD card?");
+    }
+    showNotice(text);
+    return ok;
 }
 
-void faxStopSaving()
+/// Saves the picture if saving is automatic and it has lines no file holds yet.
+void saveFaxIfUnsaved()
 {
-    if (!fax_saving) {
-        return;
+    if (fax_auto && fax_total > fax_saved_to && faxPictureLines() >= 100 && fax_total - max(fax_begin, fax_saved_to) >= 100) {
+        saveFaxPicture();
     }
-    instance.lockSPI();
-    writeBmpHeader(fax_file, fax_lines_saved);
-    fax_file.close();
-    instance.unlockSPI();
-    fax_saving = false;
-    char text[56];
-    snprintf(text, sizeof(text), "Saved %s, %u lines", fax_name, (unsigned)fax_lines_saved);
-    showNotice(text);
 }
 
 void buildFax()
@@ -885,22 +916,28 @@ void processFax()
         }
     }
 
+    // With automatic saving the station's tones divide the reception into
+    // pictures. Without it they are only reported, and the picture is whatever
+    // has arrived since the user last started a new one.
     switch (engine::nextFaxEvent()) {
     case engine::FaxEvent::Start:
-        showNotice("Start tone");
         if (fax_auto) {
-            faxStopSaving();
-            faxStartSaving();
+            saveFaxIfUnsaved();
+            fax_begin = fax_total;
+            fax_saved_to = fax_total;
         }
+        showNotice("Start tone - a new picture begins");
         break;
     case engine::FaxEvent::Phased:
         showNotice("Picture aligned");
         break;
     case engine::FaxEvent::Stop:
-        if (fax_auto && fax_saving) {
-            faxStopSaving();
+        if (fax_auto) {
+            saveFaxIfUnsaved();
+            fax_begin = fax_total;
+            fax_saved_to = fax_total;
         } else {
-            showNotice("Stop tone");
+            showNotice("Stop tone - Enter saves the picture");
         }
         break;
     default:
@@ -909,19 +946,15 @@ void processFax()
 
     bool changed = false;
     while (engine::nextFaxLine(line)) {
-        if (fax_saving) {
-            instance.lockSPI();
-            fax_file.write(line, sizeof(line));
-            ++fax_lines_saved;
-            if (fax_lines_saved % 40 == 0) {
-                // Keep the file readable if power is lost during reception
-                // Back to where the next line belongs. The length the card reports
-                // for a file being written lags behind, so it is worked out here.
-                writeBmpHeader(fax_file, fax_lines_saved);
-                fax_file.seek(kBmpDataOffset + fax_lines_saved * engine::kFaxWidth);
-                fax_file.flush();
-            }
-            instance.unlockSPI();
+        if (fax_hold) {
+            continue;  // paused: the picture stays as it is
+        }
+        if (fax_ring == nullptr) {
+            fax_ring = (uint8_t *)ps_malloc((size_t)kFaxKeep * engine::kFaxWidth);
+        }
+        if (fax_ring != nullptr) {
+            memcpy(fax_ring + (size_t)(fax_total % kFaxKeep) * engine::kFaxWidth, line, sizeof(line));
+            ++fax_total;
         }
         // The display is about half as wide as the picture, so every second line keeps the proportions
         if ((fax_line_count++ & 1) == 0 && fax_buf != nullptr) {
@@ -946,24 +979,46 @@ void drawFax()
     drawHeader(fax_header, st);
     char name[28];
     modeWithFrequency(Mode::WEFAX, name, sizeof(name));
-    if (fax_saving) {
-        lv_label_set_text_fmt(fax_header.state, "%s kHz  saving, %u lines", name, (unsigned)fax_lines_saved);
-        lv_obj_set_style_text_color(fax_header.state, kColCq, 0);
-    } else {
-        lv_label_set_text_fmt(fax_header.state, "%s kHz  120 LPM  %s", name, fax_auto ? "waiting for start" : "manual");
-        lv_obj_set_style_text_color(fax_header.state, kColText, 0);
-    }
+    // How much of the picture is in memory, and whether a file holds it already
+    uint32_t lines = faxPictureLines();
+    bool unsaved = fax_total > fax_saved_to;
+    lv_label_set_text_fmt(fax_header.state, "%s kHz  %u lines%s%s", name, (unsigned)lines,
+                          fax_hold ? "  PAUSED" : "", lines >= 20 && unsaved ? (fax_auto ? "  auto save" : "  not saved") : "");
+    lv_obj_set_style_text_color(fax_header.state, fax_hold ? kColWarn : kColText, 0);
 }
 
-void toggleFaxSaving()
+void saveFaxNow()
 {
-    fax_saving ? faxStopSaving() : faxStartSaving();
+    showNotice("Saving the picture ...");
+    drawNoticeBar();
+    lv_timer_handler();
+    saveFaxPicture();
 }
 
 void toggleFaxAuto()
 {
     fax_auto = !fax_auto;
-    showNotice(fax_auto ? "Saving starts and stops with the station's tones" : "Saving only by hand (Enter)");
+    showNotice(fax_auto ? "A picture is saved when its stop tone ends it" : "Pictures are only saved with Enter");
+}
+
+void toggleFaxHold()
+{
+    fax_hold = !fax_hold;
+    showNotice(fax_hold ? "Paused - the picture stays; Enter saves it, H goes on" : "Receiving again");
+}
+
+/// Throws away what was received and starts afresh: empty screen, empty
+/// picture, reception running. What is saved on the card stays.
+void clearFaxPicture()
+{
+    fax_begin = fax_total;
+    fax_saved_to = fax_total;
+    fax_hold = false;
+    fax_line_count = 0;
+    if (fax_buf != nullptr) {
+        lv_canvas_fill_bg(fax_canvas, kColBg, LV_OPA_COVER);
+    }
+    showNotice("Cleared - a new picture starts here");
 }
 
 void alignFax()
@@ -977,9 +1032,12 @@ void faxKey(char c)
     switch (tolower((unsigned char)c)) {
     case '\n':
     case '\r':
-        toggleFaxSaving();
+        saveFaxNow();
         break;
     case 'a': toggleFaxAuto(); break;
+    case 'h': toggleFaxHold(); break;
+    case 'c':
+    case 'n': clearFaxPicture(); break;
     case 'b': openBand(); break;
     case 'p': openFaxList(); break;
     case 0x08:
@@ -1019,7 +1077,7 @@ void powerDown(const char *reason)
     Serial.printf("[dw] %s\n", reason);
 
     engine::stop();
-    faxStopSaving();
+    saveFaxIfUnsaved();
     web::shutdown();
     settings.save();
     delay(1200);
@@ -1031,7 +1089,11 @@ void powerDown(const char *reason)
 void pollPower(const engine::Status &st, bool received)
 {
     uint32_t now = millis();
-    bool busy = received || st.transmitting || fax_saving || web::clients() > 0 ||
+    // WEFAX and NAVTEX are listened to for a long time without touching the
+    // device, and a picture arriving is not "received" in the sense of a
+    // decode: these modes keep the device awake, only the display goes off.
+    bool listening = st.mode == Mode::WEFAX || st.mode == Mode::NAVTEX;
+    bool busy = received || listening || st.transmitting || web::clients() > 0 ||
                 (engine::isSlotMode(st.mode) && strcmp(st.qso_state, "Idle") != 0);
     if (busy) {
         last_busy = now;
@@ -1293,7 +1355,9 @@ void drawHome()
     const lv_image_dsc_t *const levels[4] = {&img_status_battery_0, &img_status_battery_1, &img_status_battery_2, &img_status_battery_3};
     setIcon(home_battery, levels[constrain((battery + 16) / 33, 0, 3)], battery < 15 ? kColTx : kColText);
 
-    if (web::running()) {
+    if (noticeActive()) {
+        lv_label_set_text(home_info, notice);
+    } else if (web::running()) {
         lv_label_set_text_fmt(home_info, "%s  %s", settings.wifi_pass, web::address() + 7);
     } else if (settings.call[0] == '\0') {
         lv_label_set_text(home_info, "Enter callsign in Setup");
@@ -1312,6 +1376,11 @@ void openHome()
 void openMode(Mode m)
 {
     if (engine::mode() != m) {
+        if (engine::mode() == Mode::WEFAX) {
+            saveFaxIfUnsaved();
+            fax_total = fax_begin = fax_saved_to = 0;
+            fax_hold = false;
+        }
         engine::setMode(m);
         settings.last_mode = (int)m;
         settings.save();
@@ -1340,7 +1409,7 @@ void openMode(Mode m)
         screen = Screen::Fax;
         lv_screen_load(scr_fax);
         if (!noticeActive()) {
-            showNotice("Press the wheel for functions   Enter: save the picture");
+            showNotice("Enter: save   H: pause   C: clear   wheel press: functions");
         }
     }
 }
@@ -1576,7 +1645,6 @@ lv_obj_t *scr_faxlist, *faxlist_title, *faxlist_bg[kFaxListRows], *faxlist_row[k
 lv_obj_t *scr_faxview, *faxview_title, *faxview_canvas;
 lv_draw_buf_t *faxview_buf = nullptr;
 uint32_t faxview_top = 0;     // first line of the picture on the screen
-uint32_t faxview_delete_asked = 0;
 
 void buildFaxPages()
 {
@@ -1642,14 +1710,13 @@ void drawFaxList()
     for (int i = 0; i < kFaxListRows; ++i) {
         int idx = top + i;
         if (idx >= fax_file_count) {
-            lv_label_set_text(faxlist_row[i], i == 0 && fax_file_count == 0 ? "None yet - Enter in WEFAX starts saving" : "");
+            lv_label_set_text(faxlist_row[i], i == 0 && fax_file_count == 0 ? "None yet - Enter in WEFAX saves the picture" : "");
             lv_obj_set_style_bg_color(faxlist_bg[i], kColBg, 0);
             continue;
         }
         char title[32];
         faxTitle(fax_files[idx].name, title, sizeof(title));
-        bool busy = fax_saving && strcmp(fax_files[idx].name, fax_name) == 0;
-        lv_label_set_text_fmt(faxlist_row[i], "%s     %u lines%s", title, (unsigned)fax_files[idx].lines, busy ? "     (being saved)" : "");
+        lv_label_set_text_fmt(faxlist_row[i], "%s     %u lines", title, (unsigned)fax_files[idx].lines);
         lv_obj_set_style_bg_color(faxlist_bg[i], idx == fax_file_selected ? kColSel : kColBg, 0);
     }
 }
@@ -1703,11 +1770,7 @@ void drawFaxView()
 
     char title[32];
     faxTitle(file.name, title, sizeof(title));
-    if (faxview_delete_asked != 0 && millis() - faxview_delete_asked < 4000) {
-        lv_label_set_text(faxview_title, "Delete this picture? Choose it again to confirm");
-    } else {
-        lv_label_set_text_fmt(faxview_title, "%s   line %u of %u   wheel: scroll   press: functions", title, (unsigned)faxview_top, (unsigned)file.lines);
-    }
+    lv_label_set_text_fmt(faxview_title, "%s   line %u of %u   wheel: scroll   press: functions", title, (unsigned)faxview_top, (unsigned)file.lines);
 }
 
 void openFaxView()
@@ -1716,7 +1779,6 @@ void openFaxView()
         return;
     }
     faxview_top = 0;
-    faxview_delete_asked = 0;
     screen = Screen::FaxView;
     lv_screen_load(scr_faxview);
     drawFaxView();
@@ -1733,21 +1795,15 @@ void faxViewScroll(int dir)
 void deleteFaxPicture()
 {
     const FaxFile &file = fax_files[fax_file_selected];
-    if (fax_saving && strcmp(file.name, fax_name) == 0) {
-        showNotice("This picture is being saved right now");
-        return;
-    }
-    if (faxview_delete_asked == 0 || millis() - faxview_delete_asked > 4000) {
-        faxview_delete_asked = millis();
-        drawFaxView();
-        return;
-    }
-    char path[64];
+    // Choosing the entry in the list of functions is the decision; there is no second question
+    char path[64], text[56];
     snprintf(path, sizeof(path), "%s/%s", kFaxDir, file.name);
+    snprintf(text, sizeof(text), "Deleted %s", file.name);
     instance.lockSPI();
-    SD.remove(path);
+    bool ok = SD.remove(path);
     instance.unlockSPI();
     openFaxList();
+    showNotice(ok ? text : "Could not delete the picture");
 }
 
 // --- functions of a mode, opened with a press on the wheel -------------------------------
@@ -1823,6 +1879,14 @@ void backFromSub()
     }
 }
 
+void clearText()
+{
+    rx_len = 0;
+    rx_text[0] = '\0';
+    rx_dirty = true;
+    showNotice("Cleared");
+}
+
 void stopSending()
 {
     engine::halt();
@@ -1845,7 +1909,7 @@ void fillActs()
     act_count = 0;
     engine::Status st = engine::status();
     if (screen == Screen::FaxView) {
-        addAct("", deleteFaxPicture, false, faxview_delete_asked != 0 && millis() - faxview_delete_asked < 4000 ? "Yes, delete it" : "Delete this picture");
+        addAct("", deleteFaxPicture, false, "Delete this picture");
         addAct("Back", backToFaxList, false, "Back to the list");
         return;
     }
@@ -1862,6 +1926,7 @@ void fillActs()
         if (st.transmitting) {
             addAct("", stopSending, false, "Stop sending");
         }
+        addAct("", clearText, false, "Clear the received text");
         addValue(&settings.cw_wpm, 5, 40, 1, "Sending speed: %d WPM", settings.cw_wpm);
         addAct("", toggleOptionAct, true, "Follow the tone in the window: %s", st.option ? "on" : "off");
         break;
@@ -1869,14 +1934,18 @@ void fillActs()
         if (st.transmitting) {
             addAct("", stopSending, false, "Stop sending");
         }
+        addAct("", clearText, false, "Clear the received text");
         addAct("", toggleOptionAct, true, "Tones: %s", st.option ? "reversed" : "normal");
         break;
     case Mode::NAVTEX:
+        addAct("C", clearText, false, "Clear the received text");
         addAct("", toggleOptionAct, true, "Tones: %s", st.option ? "reversed" : "normal");
         break;
     case Mode::WEFAX:
-        addAct("Enter", toggleFaxSaving, false, fax_saving ? "Stop saving the picture" : "Save the picture to the card");
-        addAct("A", toggleFaxAuto, true, "Save with the start tone: %s", fax_auto ? "on" : "off");
+        addAct("Enter", saveFaxNow, false, "Save the picture now (%u lines)", (unsigned)faxPictureLines());
+        addAct("H", toggleFaxHold, false, fax_hold ? "Go on receiving" : "Pause reception (the picture stays)");
+        addAct("A", toggleFaxAuto, true, "Save at the stop tone: %s", fax_auto ? "on" : "off");
+        addAct("C", clearFaxPicture, false, "Clear and start a new picture");
         addAct("", alignFax, false, "Align the picture again");
         addAct("P", openFaxList, false, "Saved pictures");
         break;
@@ -2000,7 +2069,7 @@ void overlayKey(char c)
 /// The message strip of the screens that have no line at the bottom.
 void drawNoticeBar()
 {
-    bool wanted = noticeActive() && (screen == Screen::Text || screen == Screen::Fax || screen == Screen::FaxView);
+    bool wanted = noticeActive() && (screen == Screen::Text || screen == Screen::Fax || screen == Screen::FaxView || screen == Screen::FaxList);
     if (wanted) {
         lv_label_set_text(notice_bar, notice);
         lv_obj_remove_flag(notice_bar, LV_OBJ_FLAG_HIDDEN);
@@ -2153,9 +2222,9 @@ void selectMode(int mode)
     openMode((Mode)constrain(mode, 0, engine::kModes - 1));
 }
 
-bool isSavingFax(const char *name)
+unsigned saveFaxNowForTest()
 {
-    return fax_saving && strcmp(name, fax_name) == 0;
+    return saveFaxPicture() ? (unsigned)faxPictureLines() : 0;
 }
 
 const char *recentText()
@@ -2221,6 +2290,22 @@ void begin()
     // Leave the boot picture up for a moment
     while (splash_since != 0 && millis() - splash_since < 1800) {
         delay(20);
+    }
+    // Why the device started, so that waking from sleep can be told from a restart after a fault
+    const char *why = nullptr;
+    switch (esp_reset_reason()) {
+    case ESP_RST_DEEPSLEEP: why = "Woke up from sleep"; break;
+    case ESP_RST_PANIC: why = "Restarted after a fault"; break;
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: why = "Restarted by the watchdog"; break;
+    case ESP_RST_BROWNOUT: why = "Restarted: supply voltage dropped"; break;
+    default: break;
+    }
+    Serial.printf("[dw] reset reason %d%s%s\n", (int)esp_reset_reason(), why ? ": " : "", why ? why : "");
+    if (why != nullptr) {
+        showNotice(why);
+        notice_until = millis() + 15000;
     }
     openHome();
 }

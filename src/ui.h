@@ -18,8 +18,8 @@ const char *recentText();
 /// Sends text in CW or RTTY and shows it in the text window. Returns false if the mode cannot send.
 bool submitText(const char *text);
 
-/// True while the picture with this file name is being written.
-bool isSavingFax(const char *name);
+/// Saves the WEFAX picture received so far, as Enter does. Returns the number of lines written, 0 if none.
+unsigned saveFaxNowForTest();
 
 /// Saved WEFAX pictures are in this directory on the SD card.
 extern const char kFaxDir[];

@@ -10,3 +10,6 @@ __pycache__/
 
 # Original photos; web-sized copies are in docs/
 DigiWave-Productshots/
+
+# Pictures used for testing
+wefax-testbilder/

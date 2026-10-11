@@ -438,10 +438,6 @@ void handleFaxDelete()
         server.send(400, "text/plain", "Bad file name");
         return;
     }
-    if (ui::isSavingFax(name.c_str())) {
-        server.send(200, "text/plain", "This picture is being saved right now");
-        return;
-    }
     String path = String(ui::kFaxDir) + "/" + name;
     instance.lockSPI();
     bool ok = SD.cardType() != CARD_NONE && SD.remove(path);

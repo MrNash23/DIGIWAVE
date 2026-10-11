@@ -107,14 +107,16 @@ The same everywhere:
 | --- | --- |
 | Wheel | select or tune: a tile, a station, the CW receive window, the RTTY tones |
 | Wheel press | in the menu: open. In a mode: the list of its functions, with the keys that do the same directly |
-| Enter | the main action of the mode: call the selected station, send the typed line, start or stop saving a picture |
+| Enter | the main action of the mode: call the selected station, send the typed line, save the received picture |
 | Backspace | one step back: typed text first, then the open list or page, then from the mode to the menu |
 | Space + key | digits and symbols |
 
 FT8 and FT4 keep a line with their keys at the bottom of the screen; the other
 modes use the whole screen for text, spectrum or picture.
 
-Received WEFAX pictures are saved to the SD card, can be looked at on the pager
+Every WEFAX line is kept in memory (half an hour of reception), so a picture
+can be saved as a whole at any time, and is saved by itself when the station's
+stop tone ends it. Saved pictures can be looked at on the pager
 (WEFAX functions, "Saved pictures") and are shown, downloaded and deleted on
 the phone page.
 
