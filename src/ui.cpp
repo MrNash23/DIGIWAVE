@@ -43,14 +43,19 @@ const lv_color_t kColWarn = lv_color_hex(0xE0A020);
 const lv_color_t kColAccent = lv_color_hex(0x3766FF);
 const lv_color_t kColFrame = lv_color_hex(0x202D7A);
 
-enum class Screen { Home, Slot, Text, Fax, Log, Setup, Band };
+enum class Screen { Home, Slot, Text, Fax, Log, Setup, Band, FaxList, FaxView };
 Screen screen = Screen::Home;
 
 void openHome();
 void openMode(Mode m);
 void openLog();
 void openSetup();
+bool sub_from_app = false;  // a page opened from a mode returns to it, not to the menu
 void openBand();
+void openFaxList();
+void openOverlay();
+void backFromSub();
+bool inApp();
 void modeWithFrequency(Mode m, char *out, size_t size);
 void powerDown(const char *reason);
 
@@ -447,7 +452,7 @@ void drawSlot()
         lv_label_set_text(slot_footer, notice);
         lv_obj_set_style_text_color(slot_footer, kColWarn, 0);
     } else {
-        lv_label_set_text_fmt(slot_footer, "TX %s (T)  CQ (C)  Halt (H)  Log (L)  Band (B)  View (V): %s  Menu (M)  |  %d dec",
+        lv_label_set_text_fmt(slot_footer, "Enter: call   TX %s (T)   CQ (C)   Halt (H)   View (V): %s   Band (B)   |  %d dec",
                               st.tx_enabled ? "ON" : "off", list_view == ListView::Qso ? "QSO" : "all", st.decoded);
         lv_obj_set_style_text_color(slot_footer, st.tx_enabled ? kColTx : kColDim, 0);
     }
@@ -490,46 +495,52 @@ void slotPress()
     showNotice(text);
 }
 
+void toggleTx()
+{
+    bool on = !engine::status().tx_enabled;
+    if (on && !stationConfigured()) {
+        return;
+    }
+    if (on && !timebase::valid()) {
+        showNotice("No time source - TX stays off");
+        return;
+    }
+    engine::setTxEnabled(on);
+}
+
+void callCq()
+{
+    if (stationConfigured()) {
+        engine::startCq();
+        showNotice(engine::status().tx_enabled ? "Calling CQ" : "CQ armed  -  TX is off (T)");
+    }
+}
+
+void haltNow()
+{
+    engine::halt();
+    showNotice("Halted");
+}
+
+void toggleView()
+{
+    view_by_hand = true;
+    setListView(list_view == ListView::Qso ? ListView::All : ListView::Qso);
+}
+
 void slotKey(char c)
 {
     switch (tolower((unsigned char)c)) {
-    case 't': {
-        bool on = !engine::status().tx_enabled;
-        if (on && !stationConfigured()) {
-            return;
-        }
-        if (on && !timebase::valid()) {
-            showNotice("No time source - TX stays off");
-            return;
-        }
-        engine::setTxEnabled(on);
-        break;
-    }
-    case 'c':
-        if (stationConfigured()) {
-            engine::startCq();
-            showNotice(engine::status().tx_enabled ? "Calling CQ" : "CQ armed  -  TX is off (T)");
-        }
-        break;
-    case 'h':
-    case 0x08:
-        engine::halt();
-        showNotice("Halted");
-        break;
-    case 's':
-        openSetup();
-        break;
-    case 'l':
-        openLog();
-        break;
-    case 'b':
-        openBand();
-        break;
-    case 'v':
-        view_by_hand = true;
-        setListView(list_view == ListView::Qso ? ListView::All : ListView::Qso);
-        break;
+    case 't': toggleTx(); break;
+    case 'c': callCq(); break;
+    case 'h': haltNow(); break;
+    case 's': openSetup(); break;
+    case 'l': openLog(); break;
+    case 'b': openBand(); break;
+    case 'v': toggleView(); break;
     case 'm':
+    case 0x08:
+        // Back leaves to the menu; a contact goes on in the background until H
         openHome();
         break;
     case '\n':
@@ -544,14 +555,14 @@ void slotKey(char c)
 // --- CW, RTTY, NAVTEX screen ---------------------------------------------------------
 
 constexpr int kTextY = 20;
-constexpr int kTextWfY = 180;       // spectrum strip
+constexpr int kTextWfY = 200;       // spectrum strip
 constexpr int kTextWfHeight = 20;
-constexpr int kMarkY = 171;         // band above it for the tuning marks
+constexpr int kMarkY = 191;         // band above it for the tuning marks
 
 lv_obj_t *scr_text;
 Header text_header;
 Waterfall text_wf;
-lv_obj_t *text_box, *text_label, *input_label, *text_footer, *marker_a, *marker_b, *marker_span, *marker_tone;
+lv_obj_t *text_box, *text_label, *input_label, *marker_a, *marker_b, *marker_span, *marker_tone;
 
 // Triangle pointing down, 9 x 7 pixels, as an alpha mask
 constexpr int kTriW = 9, kTriH = 7;
@@ -580,7 +591,6 @@ char rx_text[1500] = "";
 size_t rx_len = 0;
 bool rx_dirty = false;
 char input[80] = "";
-bool cw_wheel_sets_speed = false;  // otherwise the wheel moves the receive window
 
 void appendText(const char *s, size_t n)
 {
@@ -601,7 +611,7 @@ void buildText()
 {
     scr_text = makeScreen();
     text_header = makeHeader(scr_text, false);
-    text_box = makeBox(scr_text, 0, kTextY, kWidth, 128, kColBg);
+    text_box = makeBox(scr_text, 0, kTextY, kWidth, 148, kColBg);
     text_label = lv_label_create(text_box);
     lv_obj_set_width(text_label, kWidth - 8);
     lv_label_set_long_mode(text_label, LV_LABEL_LONG_WRAP);
@@ -611,7 +621,7 @@ void buildText()
     // The newest text stays visible: the label grows upwards out of the box
     lv_obj_align(text_label, LV_ALIGN_BOTTOM_LEFT, 4, 0);
 
-    input_label = makeLabel(scr_text, 4, 150, kWidth - 8, &lv_font_montserrat_14, kColCq);
+    input_label = makeLabel(scr_text, 4, 170, kWidth - 8, &lv_font_montserrat_14, kColCq);
     text_wf = makeWaterfall(scr_text, kTextWfY, kTextWfHeight);
     // The tuning marks sit above the spectrum, not in it
     buildTriangle();
@@ -619,7 +629,6 @@ void buildText()
     marker_a = makeIcon(scr_text, kWfX, kMarkY, &tri_image);
     marker_b = makeIcon(scr_text, kWfX, kMarkY, &tri_image);
     marker_tone = makeBox(scr_text, kWfX, kMarkY + 4, 3, 4, kColCq);
-    text_footer = makeLabel(scr_text, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
 }
 
 void drawText()
@@ -638,24 +647,15 @@ void drawText()
         } else {
             lv_label_set_text_fmt(text_header.state, "%s RX  %d WPM  %d Hz  %s", name, st.wpm, st.tune_hz, lock);
         }
-        if (cw_wheel_sets_speed) {
-            lv_label_set_text_fmt(text_footer, "wheel: sending speed %d WPM   press: window   Enter: send, on an empty line: band   Backspace: menu",
-                                  settings.cw_wpm);
-        } else {
-            lv_label_set_text_fmt(text_footer, "wheel: window %d Hz (signal between the marks)   press: speed   Enter: send, empty: band",
-                                  settings.cw_tone);
-        }
         break;
     case Mode::RTTY:
         lv_label_set_text_fmt(text_header.state, "%s %s  %s Bd  %d/%d%s  %s", name, st.transmitting ? "TX" : "RX",
                               settings.rtty_50_baud ? "50" : "45", settings.rtty_mark, settings.rtty_mark + settings.rtty_shift,
                               st.option ? " rev" : "", st.transmitting ? "" : lock);
-        lv_label_set_text(text_footer, "Enter: send, on an empty line: band   wheel: tune   press: reverse   Backspace on empty line: menu");
         break;
     default:
         lv_label_set_text_fmt(text_header.state, "%s kHz  centre %d Hz%s  %s", name, settings.navtex_center, st.option ? " rev" : "",
                               st.locked ? "in step" : "searching");
-        lv_label_set_text(text_footer, "wheel: tune   press: reverse   B: stations   Backspace: menu");
         break;
     }
     lv_obj_set_style_text_color(text_header.state, st.transmitting ? kColTx : kColText, 0);
@@ -697,11 +697,11 @@ void drawText()
     }
 
     // NAVTEX only receives: the input line makes room for text
-    lv_obj_set_height(text_box, can_send ? 128 : 148);
+    lv_obj_set_height(text_box, can_send ? 148 : 168);
     if (can_send) {
         lv_obj_remove_flag(input_label, LV_OBJ_FLAG_HIDDEN);
         if (input[0] == '\0') {
-            lv_label_set_text(input_label, "> _      digits and symbols: hold Space + key");
+            lv_label_set_text(input_label, "> _      type and Enter to send   digits and symbols: hold Space + key");
         } else {
             lv_label_set_text_fmt(input_label, "> %s_", input);
         }
@@ -720,7 +720,6 @@ void drawText()
 
 void leaveTextMode()
 {
-    engine::halt();
     settings.save();  // tuning and options changed on this screen
     openHome();
 }
@@ -729,12 +728,8 @@ void textRotate(int dir)
 {
     switch (engine::mode()) {
     case Mode::CW:
-        if (cw_wheel_sets_speed) {
-            settings.cw_wpm = constrain(settings.cw_wpm + dir, 5, 40);
-        } else {
-            // The window is also the tone we send on
-            settings.cw_tone = constrain(settings.cw_tone + dir * 10, 400, 1200);
-        }
+        // The wheel moves the receive window, which is also the tone we send on
+        settings.cw_tone = constrain(settings.cw_tone + dir * 10, 400, 1200);
         engine::applySettings();
         break;
     default:
@@ -748,9 +743,8 @@ void textKey(char c)
     bool can_send = engine::canSendText(engine::mode());
     size_t n = strlen(input);
     if (c == 0x08) {
-        if (engine::status().transmitting) {
-            engine::halt();
-        } else if (n > 0) {
+        // Back takes typed text away first, then leaves to the menu
+        if (n > 0) {
             input[n - 1] = '\0';
         } else {
             leaveTextMode();
@@ -759,9 +753,6 @@ void textKey(char c)
         if (can_send && n > 0) {
             submitText(input);
             input[0] = '\0';
-        } else if (!engine::status().transmitting) {
-            // Letters are text to send here, so Enter on an empty line opens the frequencies
-            openBand();
         }
     } else if (!can_send && tolower((unsigned char)c) == 'b') {
         openBand();
@@ -774,11 +765,12 @@ void textKey(char c)
 // --- WEFAX screen ----------------------------------------------------------------------
 
 constexpr int kFaxY = 20;
-constexpr int kFaxHeight = 180;
+constexpr int kFaxHeight = 202;
+constexpr uint32_t kBmpDataOffset = 14 + 40 + 256 * 4;
 
 lv_obj_t *scr_fax;
 Header fax_header;
-lv_obj_t *fax_canvas, *fax_footer;
+lv_obj_t *fax_canvas;
 lv_draw_buf_t *fax_buf;
 
 File fax_file;
@@ -878,7 +870,6 @@ void buildFax()
         lv_canvas_fill_bg(fax_canvas, kColBg, LV_OPA_COVER);
     }
     lv_obj_set_pos(fax_canvas, 0, kFaxY);
-    fax_footer = makeLabel(scr_fax, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
 }
 
 /// Takes picture lines from the receiver: saves them and adds them to the display.
@@ -924,8 +915,10 @@ void processFax()
             ++fax_lines_saved;
             if (fax_lines_saved % 40 == 0) {
                 // Keep the file readable if power is lost during reception
+                // Back to where the next line belongs. The length the card reports
+                // for a file being written lags behind, so it is worked out here.
                 writeBmpHeader(fax_file, fax_lines_saved);
-                fax_file.seek(fax_file.size());
+                fax_file.seek(kBmpDataOffset + fax_lines_saved * engine::kFaxWidth);
                 fax_file.flush();
             }
             instance.unlockSPI();
@@ -960,14 +953,23 @@ void drawFax()
         lv_label_set_text_fmt(fax_header.state, "%s kHz  120 LPM  %s", name, fax_auto ? "waiting for start" : "manual");
         lv_obj_set_style_text_color(fax_header.state, kColText, 0);
     }
-    if (noticeActive()) {
-        lv_label_set_text(fax_footer, notice);
-        lv_obj_set_style_text_color(fax_footer, kColWarn, 0);
-    } else {
-        lv_label_set_text_fmt(fax_footer, "Enter: %s saving   A: auto %s   B: stations   wheel: move   press: align   Backspace: menu",
-                              fax_saving ? "stop" : "start", fax_auto ? "on" : "off");
-        lv_obj_set_style_text_color(fax_footer, kColDim, 0);
-    }
+}
+
+void toggleFaxSaving()
+{
+    fax_saving ? faxStopSaving() : faxStartSaving();
+}
+
+void toggleFaxAuto()
+{
+    fax_auto = !fax_auto;
+    showNotice(fax_auto ? "Saving starts and stops with the station's tones" : "Saving only by hand (Enter)");
+}
+
+void alignFax()
+{
+    engine::faxRephase();
+    showNotice("Waiting for the phasing signal");
 }
 
 void faxKey(char c)
@@ -975,14 +977,11 @@ void faxKey(char c)
     switch (tolower((unsigned char)c)) {
     case '\n':
     case '\r':
-        fax_saving ? faxStopSaving() : faxStartSaving();
+        toggleFaxSaving();
         break;
-    case 'a':
-        fax_auto = !fax_auto;
-        break;
-    case 'b':
-        openBand();
-        break;
+    case 'a': toggleFaxAuto(); break;
+    case 'b': openBand(); break;
+    case 'p': openFaxList(); break;
     case 0x08:
         openHome();
         break;
@@ -1147,6 +1146,7 @@ void drawSetup()
 
 void openSetup()
 {
+    sub_from_app = inApp();
     set_selected = 0;
     set_top = 0;
     editing = false;
@@ -1161,7 +1161,7 @@ void closeSetup()
     engine::applySettings();
     extensionPortPtt(settings.ptt_active_high).set(false);
     web::apply();
-    openHome();
+    backFromSub();
 }
 
 void setupRotate(int dir)
@@ -1333,9 +1333,15 @@ void openMode(Mode m)
         screen = Screen::Text;
         rx_dirty = true;
         lv_screen_load(scr_text);
+        if (!noticeActive()) {
+            showNotice("Press the wheel for functions");
+        }
     } else {
         screen = Screen::Fax;
         lv_screen_load(scr_fax);
+        if (!noticeActive()) {
+            showNotice("Press the wheel for functions   Enter: save the picture");
+        }
     }
 }
 
@@ -1402,6 +1408,7 @@ void drawLog()
 
 void openLog()
 {
+    sub_from_app = inApp();
     log_top = 0;
     screen = Screen::Log;
     drawLog();
@@ -1554,6 +1561,454 @@ void bandKey(char c)
     drawBand();
 }
 
+// --- saved WEFAX pictures -----------------------------------------------------------------
+
+constexpr int kMaxFaxFiles = 60;
+constexpr int kFaxListRows = 9;
+struct FaxFile {
+    char name[32];
+    uint32_t lines;
+};
+FaxFile *fax_files = nullptr;
+int fax_file_count = 0;
+int fax_file_selected = 0;
+lv_obj_t *scr_faxlist, *faxlist_title, *faxlist_bg[kFaxListRows], *faxlist_row[kFaxListRows], *faxlist_footer;
+lv_obj_t *scr_faxview, *faxview_title, *faxview_canvas;
+lv_draw_buf_t *faxview_buf = nullptr;
+uint32_t faxview_top = 0;     // first line of the picture on the screen
+uint32_t faxview_delete_asked = 0;
+
+void buildFaxPages()
+{
+    scr_faxlist = makeScreen();
+    faxlist_title = makeLabel(scr_faxlist, 4, 2, kWidth - 8, &lv_font_montserrat_14, kColCq);
+    for (int i = 0; i < kFaxListRows; ++i) {
+        int y = 22 + i * 20;
+        faxlist_bg[i] = makeBox(scr_faxlist, 0, y, kWidth, 20, kColBg);
+        faxlist_row[i] = makeLabel(scr_faxlist, 8, y + 2, kWidth - 16, &lv_font_montserrat_14, kColText);
+    }
+    faxlist_footer = makeLabel(scr_faxlist, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
+    lv_label_set_text(faxlist_footer, "wheel: select   press: look at it   Backspace: back");
+
+    scr_faxview = makeScreen();
+    faxview_title = makeLabel(scr_faxview, 4, 2, kWidth - 8, &lv_font_montserrat_14, kColCq);
+    faxview_canvas = lv_canvas_create(scr_faxview);
+    lv_obj_set_pos(faxview_canvas, 0, kFaxY);
+}
+
+void scanFaxFiles()
+{
+    if (fax_files == nullptr) {
+        fax_files = (FaxFile *)ps_calloc(kMaxFaxFiles, sizeof(FaxFile));
+    }
+    fax_file_count = 0;
+    if (fax_files == nullptr) {
+        return;
+    }
+    instance.lockSPI();
+    File dir = SD.cardType() != CARD_NONE ? SD.open(kFaxDir) : File();
+    if (dir && dir.isDirectory()) {
+        for (File f = dir.openNextFile(); f && fax_file_count < kMaxFaxFiles; f = dir.openNextFile()) {
+            const char *name = f.name();
+            size_t n = strlen(name);
+            if (!f.isDirectory() && name[0] != '.' && n > 4 && n < sizeof(fax_files[0].name) && strcasecmp(name + n - 4, ".bmp") == 0) {
+                FaxFile &entry = fax_files[fax_file_count++];
+                strcpy(entry.name, name);
+                uint32_t size = (uint32_t)f.size();
+                entry.lines = size > kBmpDataOffset ? (size - kBmpDataOffset) / engine::kFaxWidth : 0;
+            }
+            f.close();
+        }
+    }
+    instance.unlockSPI();
+    // The names carry date and time, so this puts the newest first
+    qsort(fax_files, fax_file_count, sizeof(FaxFile), [](const void *a, const void *b) { return strcmp(((const FaxFile *)b)->name, ((const FaxFile *)a)->name); });
+}
+
+/// "WF_20261011_143210.bmp" as "2026-10-11 14:32:10"; other names stay as they are.
+void faxTitle(const char *name, char *out, size_t size)
+{
+    if (strlen(name) >= 18 && strncmp(name, "WF_", 3) == 0 && name[11] == '_') {
+        snprintf(out, size, "%.4s-%.2s-%.2s %.2s:%.2s:%.2s UTC", name + 3, name + 7, name + 9, name + 12, name + 14, name + 16);
+    } else {
+        snprintf(out, size, "%s", name);
+    }
+}
+
+void drawFaxList()
+{
+    lv_label_set_text_fmt(faxlist_title, "Saved WEFAX pictures (%d)", fax_file_count);
+    int top = constrain(fax_file_selected - kFaxListRows / 2, 0, max(0, fax_file_count - kFaxListRows));
+    for (int i = 0; i < kFaxListRows; ++i) {
+        int idx = top + i;
+        if (idx >= fax_file_count) {
+            lv_label_set_text(faxlist_row[i], i == 0 && fax_file_count == 0 ? "None yet - Enter in WEFAX starts saving" : "");
+            lv_obj_set_style_bg_color(faxlist_bg[i], kColBg, 0);
+            continue;
+        }
+        char title[32];
+        faxTitle(fax_files[idx].name, title, sizeof(title));
+        bool busy = fax_saving && strcmp(fax_files[idx].name, fax_name) == 0;
+        lv_label_set_text_fmt(faxlist_row[i], "%s     %u lines%s", title, (unsigned)fax_files[idx].lines, busy ? "     (being saved)" : "");
+        lv_obj_set_style_bg_color(faxlist_bg[i], idx == fax_file_selected ? kColSel : kColBg, 0);
+    }
+}
+
+void openFaxList()
+{
+    scanFaxFiles();
+    fax_file_selected = constrain(fax_file_selected, 0, max(0, fax_file_count - 1));
+    screen = Screen::FaxList;
+    drawFaxList();
+    lv_screen_load(scr_faxlist);
+}
+
+/// Draws the part of the saved picture that begins at faxview_top: two lines
+/// and two columns of it make one pixel, as in the live view.
+void drawFaxView()
+{
+    if (faxview_buf == nullptr) {
+        faxview_buf = lv_draw_buf_create(kWidth, kFaxHeight, LV_COLOR_FORMAT_RGB565, 0);
+        if (faxview_buf == nullptr) {
+            return;
+        }
+        lv_canvas_set_draw_buf(faxview_canvas, faxview_buf);
+    }
+    const FaxFile &file = fax_files[fax_file_selected];
+    static uint8_t pair[2 * engine::kFaxWidth];
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", kFaxDir, file.name);
+    uint32_t stride = faxview_buf->header.stride;
+    instance.lockSPI();
+    File f = SD.open(path, FILE_READ);
+    for (int row = 0; row < kFaxHeight; ++row) {
+        uint16_t *out = (uint16_t *)(faxview_buf->data + stride * row);
+        uint32_t line = faxview_top + 2 * (uint32_t)row;
+        bool have = f && line + 1 < file.lines && f.seek(kBmpDataOffset + line * engine::kFaxWidth) && f.read(pair, sizeof(pair)) == sizeof(pair);
+        for (int x = 0; x < kWidth; ++x) {
+            if (!have) {
+                out[x] = lv_color_to_u16(kColBg);
+                continue;
+            }
+            int a = x * engine::kFaxWidth / kWidth;
+            int v = (pair[a] + pair[a + 1] + pair[engine::kFaxWidth + a] + pair[engine::kFaxWidth + a + 1]) / 4;
+            out[x] = lv_color_to_u16(lv_color_make(v, v, v));
+        }
+    }
+    if (f) {
+        f.close();
+    }
+    instance.unlockSPI();
+    lv_obj_invalidate(faxview_canvas);
+
+    char title[32];
+    faxTitle(file.name, title, sizeof(title));
+    if (faxview_delete_asked != 0 && millis() - faxview_delete_asked < 4000) {
+        lv_label_set_text(faxview_title, "Delete this picture? Choose it again to confirm");
+    } else {
+        lv_label_set_text_fmt(faxview_title, "%s   line %u of %u   wheel: scroll   press: functions", title, (unsigned)faxview_top, (unsigned)file.lines);
+    }
+}
+
+void openFaxView()
+{
+    if (fax_file_count == 0) {
+        return;
+    }
+    faxview_top = 0;
+    faxview_delete_asked = 0;
+    screen = Screen::FaxView;
+    lv_screen_load(scr_faxview);
+    drawFaxView();
+}
+
+void faxViewScroll(int dir)
+{
+    const FaxFile &file = fax_files[fax_file_selected];
+    int32_t most = (int32_t)file.lines - 2 * kFaxHeight;
+    faxview_top = (uint32_t)constrain((int32_t)faxview_top + dir * 60, (int32_t)0, max((int32_t)0, most));
+    drawFaxView();
+}
+
+void deleteFaxPicture()
+{
+    const FaxFile &file = fax_files[fax_file_selected];
+    if (fax_saving && strcmp(file.name, fax_name) == 0) {
+        showNotice("This picture is being saved right now");
+        return;
+    }
+    if (faxview_delete_asked == 0 || millis() - faxview_delete_asked > 4000) {
+        faxview_delete_asked = millis();
+        drawFaxView();
+        return;
+    }
+    char path[64];
+    snprintf(path, sizeof(path), "%s/%s", kFaxDir, file.name);
+    instance.lockSPI();
+    SD.remove(path);
+    instance.unlockSPI();
+    openFaxList();
+}
+
+// --- functions of a mode, opened with a press on the wheel -------------------------------
+
+// Each mode lists what can be done in it; the letters on the right are the
+// keys that do the same without opening the list (where letters are not text to send).
+struct Act {
+    char label[44];
+    const char *key;
+    void (*run)();        // nullptr for a value
+    int *value;           // a number changed with the wheel after choosing the row
+    int min, max, step;
+    bool stay;            // the list stays open: the row shows a state that just changed
+};
+constexpr int kMaxActs = 14;
+constexpr int kOverlayRows = 9;
+constexpr int kOverlayWidth = 300;
+Act acts[kMaxActs];
+int act_count = 0;
+int act_selected = 0;
+bool overlay_open = false;
+bool act_editing = false;
+lv_obj_t *ov_box, *ov_bg[kOverlayRows], *ov_name[kOverlayRows], *ov_key[kOverlayRows];
+lv_obj_t *notice_bar;
+
+void addAct(const char *key, void (*run)(), bool stay, const char *fmt, ...)
+{
+    if (act_count == kMaxActs) {
+        return;
+    }
+    Act &a = acts[act_count++];
+    a = Act{};
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(a.label, sizeof(a.label), fmt, args);
+    va_end(args);
+    a.key = key;
+    a.run = run;
+    a.stay = stay;
+}
+
+void addValue(int *value, int min, int max, int step, const char *fmt, ...)
+{
+    if (act_count == kMaxActs) {
+        return;
+    }
+    Act &a = acts[act_count++];
+    a = Act{};
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(a.label, sizeof(a.label), fmt, args);
+    va_end(args);
+    a.key = "";
+    a.value = value;
+    a.min = min;
+    a.max = max;
+    a.step = step;
+    a.stay = true;
+}
+
+bool inApp()
+{
+    return screen == Screen::Slot || screen == Screen::Text || screen == Screen::Fax || screen == Screen::FaxList || screen == Screen::FaxView;
+}
+
+/// Where Back leads from a page that was opened out of a mode.
+void backFromSub()
+{
+    if (sub_from_app) {
+        openMode(engine::mode());
+    } else {
+        openHome();
+    }
+}
+
+void stopSending()
+{
+    engine::halt();
+    showNotice("Sending stopped");
+}
+
+void toggleOptionAct()
+{
+    engine::toggleOption();
+}
+
+void backToFaxList()
+{
+    openFaxList();
+}
+
+/// The list for the screen shown. Built anew every time, so that the rows show the current state.
+void fillActs()
+{
+    act_count = 0;
+    engine::Status st = engine::status();
+    if (screen == Screen::FaxView) {
+        addAct("", deleteFaxPicture, false, faxview_delete_asked != 0 && millis() - faxview_delete_asked < 4000 ? "Yes, delete it" : "Delete this picture");
+        addAct("Back", backToFaxList, false, "Back to the list");
+        return;
+    }
+    switch (st.mode) {
+    case Mode::FT8:
+    case Mode::FT4:
+        addAct("Enter", slotPress, false, "Call the selected station");
+        addAct("T", toggleTx, true, "Transmitter: %s", st.tx_enabled ? "ON" : "off");
+        addAct("C", callCq, false, "Call CQ");
+        addAct("H", haltNow, false, "Halt (stop sending, drop the contact)");
+        addAct("V", toggleView, true, "List shows: %s", list_view == ListView::Qso ? "the contact" : "everything heard");
+        break;
+    case Mode::CW:
+        if (st.transmitting) {
+            addAct("", stopSending, false, "Stop sending");
+        }
+        addValue(&settings.cw_wpm, 5, 40, 1, "Sending speed: %d WPM", settings.cw_wpm);
+        addAct("", toggleOptionAct, true, "Follow the tone in the window: %s", st.option ? "on" : "off");
+        break;
+    case Mode::RTTY:
+        if (st.transmitting) {
+            addAct("", stopSending, false, "Stop sending");
+        }
+        addAct("", toggleOptionAct, true, "Tones: %s", st.option ? "reversed" : "normal");
+        break;
+    case Mode::NAVTEX:
+        addAct("", toggleOptionAct, true, "Tones: %s", st.option ? "reversed" : "normal");
+        break;
+    case Mode::WEFAX:
+        addAct("Enter", toggleFaxSaving, false, fax_saving ? "Stop saving the picture" : "Save the picture to the card");
+        addAct("A", toggleFaxAuto, true, "Save with the start tone: %s", fax_auto ? "on" : "off");
+        addAct("", alignFax, false, "Align the picture again");
+        addAct("P", openFaxList, false, "Saved pictures");
+        break;
+    }
+    bool letters = !engine::canSendText(st.mode);  // in CW and RTTY letters are text to send
+    addAct(letters ? "B" : "", openBand, false, st.mode == Mode::NAVTEX || st.mode == Mode::WEFAX ? "Stations and their frequencies" : "Band and frequency");
+    addAct(engine::isSlotMode(st.mode) ? "L" : "", openLog, false, "Logbook");
+    addAct(engine::isSlotMode(st.mode) ? "S" : "", openSetup, false, "Setup");
+    addAct("Back", openHome, false, "Main menu");
+}
+
+void buildOverlay()
+{
+    // On the top layer, so that it lies over whichever screen is shown
+    ov_box = makeBox(lv_layer_top(), kWidth - kOverlayWidth - 2, 21, kOverlayWidth, kOverlayRows * 20 + 4, lv_color_hex(0x0A0F2E));
+    lv_obj_set_style_border_width(ov_box, 1, 0);
+    lv_obj_set_style_border_color(ov_box, kColCq, 0);
+    for (int i = 0; i < kOverlayRows; ++i) {
+        ov_bg[i] = makeBox(ov_box, 1, 1 + i * 20, kOverlayWidth - 4, 20, lv_color_hex(0x0A0F2E));
+        ov_name[i] = makeLabel(ov_box, 8, 3 + i * 20, kOverlayWidth - 70, &lv_font_montserrat_14, kColText);
+        ov_key[i] = makeLabel(ov_box, kOverlayWidth - 60, 3 + i * 20, 50, &lv_font_montserrat_14, kColCq);
+        lv_obj_set_style_text_align(ov_key[i], LV_TEXT_ALIGN_RIGHT, 0);
+    }
+    lv_obj_add_flag(ov_box, LV_OBJ_FLAG_HIDDEN);
+
+    // Messages on screens without a line at the bottom
+    notice_bar = makeLabel(lv_layer_top(), 0, kFooterY, kWidth, &lv_font_montserrat_14, kColWarn);
+    lv_obj_set_style_bg_color(notice_bar, lv_color_hex(0x0A0F2E), 0);
+    lv_obj_set_style_bg_opa(notice_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(notice_bar, 6, 0);
+    lv_obj_set_style_pad_ver(notice_bar, 2, 0);
+    lv_obj_add_flag(notice_bar, LV_OBJ_FLAG_HIDDEN);
+}
+
+void drawOverlay()
+{
+    fillActs();
+    act_selected = constrain(act_selected, 0, act_count - 1);
+    int rows = min(act_count, kOverlayRows);
+    lv_obj_set_height(ov_box, rows * 20 + 4);
+    int top = constrain(act_selected - kOverlayRows / 2, 0, max(0, act_count - kOverlayRows));
+    for (int i = 0; i < kOverlayRows; ++i) {
+        int idx = top + i;
+        if (idx >= act_count) {
+            lv_obj_add_flag(ov_bg[i], LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(ov_name[i], "");
+            lv_label_set_text(ov_key[i], "");
+            continue;
+        }
+        lv_obj_remove_flag(ov_bg[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(ov_name[i], acts[idx].label);
+        lv_label_set_text(ov_key[i], idx == act_selected && act_editing ? "wheel" : acts[idx].key);
+        lv_obj_set_style_bg_color(ov_bg[i], idx == act_selected ? (act_editing ? kColEdit : kColSel) : lv_color_hex(0x0A0F2E), 0);
+    }
+}
+
+void closeOverlay()
+{
+    overlay_open = false;
+    act_editing = false;
+    lv_obj_add_flag(ov_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+void openOverlay()
+{
+    overlay_open = true;
+    act_editing = false;
+    act_selected = 0;
+    lv_obj_remove_flag(ov_box, LV_OBJ_FLAG_HIDDEN);
+    drawOverlay();
+}
+
+void overlayRotate(int dir)
+{
+    Act &a = acts[act_selected];
+    if (act_editing && a.value != nullptr) {
+        *a.value = constrain(*a.value + dir * a.step, a.min, a.max);
+        engine::applySettings();
+    } else {
+        act_selected = constrain(act_selected + dir, 0, act_count - 1);
+    }
+    drawOverlay();
+}
+
+void overlayChoose()
+{
+    Act a = acts[act_selected];
+    if (a.value != nullptr) {
+        // A press starts and ends changing the number with the wheel
+        act_editing = !act_editing;
+        if (!act_editing) {
+            settings.save();
+        }
+        drawOverlay();
+        return;
+    }
+    if (!a.stay) {
+        closeOverlay();
+    }
+    a.run();
+    if (a.stay && overlay_open) {
+        drawOverlay();
+    }
+}
+
+void overlayKey(char c)
+{
+    if (c == 0x08) {
+        if (act_editing) {
+            act_editing = false;
+            settings.save();
+            drawOverlay();
+        } else {
+            closeOverlay();
+        }
+    } else if (c == '\n' || c == '\r') {
+        overlayChoose();
+    }
+}
+
+/// The message strip of the screens that have no line at the bottom.
+void drawNoticeBar()
+{
+    bool wanted = noticeActive() && (screen == Screen::Text || screen == Screen::Fax || screen == Screen::FaxView);
+    if (wanted) {
+        lv_label_set_text(notice_bar, notice);
+        lv_obj_remove_flag(notice_bar, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(notice_bar, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 // --- input and housekeeping ------------------------------------------------------------
 
 void updateGridFromGps()
@@ -1596,6 +2051,22 @@ void pollInput()
         }
     }
 
+    // The list of functions takes all input while it is open
+    if (overlay_open) {
+        if (dir != 0) {
+            overlayRotate(dir);
+        }
+        if (pressed) {
+            overlayChoose();
+        }
+        char key = 0;
+        while (overlay_open && instance.getKeyChar(&key) == KB_PRESSED) {
+            last_input = millis();
+            overlayKey(key);
+        }
+        return;
+    }
+
     if (dir != 0) {
         switch (screen) {
         case Screen::Home: homeRotate(dir); break;
@@ -1611,26 +2082,25 @@ void pollInput()
             band_selected = constrain(band_selected + dir, 0, band_entries);
             drawBand();
             break;
+        case Screen::FaxList:
+            fax_file_selected = constrain(fax_file_selected + dir, 0, max(0, fax_file_count - 1));
+            drawFaxList();
+            break;
+        case Screen::FaxView: faxViewScroll(dir); break;
         }
     }
     if (pressed) {
         switch (screen) {
         case Screen::Home: homePress(); break;
-        case Screen::Slot: slotPress(); break;
+        // In the modes the press opens their functions
+        case Screen::Slot:
         case Screen::Text:
-            if (engine::mode() == Mode::CW) {
-                cw_wheel_sets_speed = !cw_wheel_sets_speed;
-            } else {
-                engine::toggleOption();
-            }
-            break;
         case Screen::Fax:
-            engine::faxRephase();
-            showNotice("Waiting for the phasing signal");
-            break;
+        case Screen::FaxView: openOverlay(); break;
         case Screen::Log: break;
         case Screen::Setup: setupPress(); break;
         case Screen::Band: closeBand(true); break;
+        case Screen::FaxList: openFaxView(); break;
         }
     }
 
@@ -1652,11 +2122,26 @@ void pollInput()
         case Screen::Fax: faxKey(c); break;
         case Screen::Log:
             if (c == 0x08) {
-                openHome();
+                backFromSub();
             }
             break;
         case Screen::Setup: setupKey(c); break;
         case Screen::Band: bandKey(c); break;
+        case Screen::FaxList:
+            if (c == 0x08) {
+                openMode(Mode::WEFAX);
+            } else if (c == '\n' || c == '\r') {
+                openFaxView();
+            }
+            break;
+        case Screen::FaxView:
+            if (c == 0x08) {
+                openFaxList();
+            }
+            break;
+        }
+        if (overlay_open) {
+            break;  // a key just opened the list; the rest belongs to it
         }
     }
 }
@@ -1666,6 +2151,11 @@ void pollInput()
 void selectMode(int mode)
 {
     openMode((Mode)constrain(mode, 0, engine::kModes - 1));
+}
+
+bool isSavingFax(const char *name)
+{
+    return fax_saving && strcmp(name, fax_name) == 0;
 }
 
 const char *recentText()
@@ -1721,6 +2211,8 @@ void begin()
     buildFax();
     buildSetup();
     buildBand();
+    buildFaxPages();
+    buildOverlay();
     buildHome();
     buildLog();
     logbook::load();
@@ -1774,6 +2266,10 @@ void loop()
         case Screen::Text: drawText(); break;
         case Screen::Fax: drawFax(); break;
         default: break;
+        }
+        drawNoticeBar();
+        if (overlay_open) {
+            drawOverlay();  // states shown in it may have changed
         }
     }
     lv_timer_handler();

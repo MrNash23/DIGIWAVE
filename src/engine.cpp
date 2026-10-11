@@ -704,7 +704,14 @@ void begin(AudioIo &a, Ptt &p)
     log_queue = xQueueCreate(4, sizeof(LogItem));
     rx_text_queue = xQueueCreate(512, sizeof(char));
     tx_text_queue = xQueueCreate(256, sizeof(char));
-    fax_line_queue = xQueueCreate(6, kFaxWidth);
+    // Picture lines wait here for the main loop, which is busy for seconds while
+    // a phone downloads a picture or the logbook. Two minutes of lines fit,
+    // kept in PSRAM; without the room, lines of a running reception were lost.
+    constexpr int kFaxQueueLines = 240;
+    static StaticQueue_t fax_queue_state;
+    uint8_t *fax_queue_store = (uint8_t *)ps_malloc((size_t)kFaxQueueLines * kFaxWidth);
+    fax_line_queue = fax_queue_store != nullptr ? xQueueCreateStatic(kFaxQueueLines, kFaxWidth, fax_queue_store, &fax_queue_state)
+                                                : xQueueCreate(6, kFaxWidth);
     fax_event_queue = xQueueCreate(4, sizeof(FaxEvent));
     if (!spectrum.begin()) {
         Serial.println("[dw] spectrum: out of memory");

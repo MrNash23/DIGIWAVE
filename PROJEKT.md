@@ -29,6 +29,11 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
   beantworten; das Logbuch liegt als ADIF auf der SD-Karte (`/digiwave.adi`)
 - CB-Betrieb (11 m) für FT8/FT4 nach den Regeln von WSJT-CB: CB-Rufzeichen wie
   `26AT016`, eigene Nachrichtenfolge, Länderliste nach Divisionsnummer
+- Einheitliche Bedienung: Rad wählt oder stimmt ab, Rad-Druck öffnet in jeder
+  Betriebsart die Liste ihrer Funktionen (mit Kurztasten), Enter ist die
+  Hauptaktion, Backspace geht eine Ebene zurück bis ins Menü
+- Gespeicherte WEFAX-Bilder lassen sich am Pager ansehen und löschen, auf der
+  Handy-Seite ansehen, herunterladen und löschen
 - Eigene Sendungen stehen in der Liste; beim Rufen oder im QSO zeigt die Liste
   nur das eigene QSO (Taste V wechselt zwischen QSO und allen Empfangenen)
 - Band und Frequenz fürs Logbuch: Da das Funkgerät von Hand abgestimmt wird,

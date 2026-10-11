@@ -83,6 +83,7 @@ a{color:#00f5f8}
 <section id="pfax">
 <h2>WEFAX pictures on the SD card</h2>
 <div id="faxlist" class="dim">none yet</div>
+<canvas id="faxcv" class="hide" style="width:100%;margin-top:8px;image-rendering:pixelated"></canvas>
 </section>
 <h2>Station</h2>
 <form onsubmit="save(event)">
@@ -112,9 +113,21 @@ async function loadFax(){
   try{const l=await (await fetch('/api/fax')).json();const d=$('faxlist');
     if(!l.length){d.textContent='none yet';return}
     d.textContent='';d.className='';
-    for(const n of l.reverse()){const a=document.createElement('a');a.href='/fax?f='+encodeURIComponent(n);a.textContent=n;a.target='_blank';
-      const p=document.createElement('p');p.appendChild(a);d.appendChild(p)}
+    for(const n of l.sort().reverse()){const p=document.createElement('p');
+      const v=document.createElement('button');v.textContent=n;v.onclick=()=>showFax(n);p.appendChild(v);
+      const a=document.createElement('a');a.href='/fax?f='+encodeURIComponent(n);a.textContent=' download ';a.download=n;p.appendChild(a);
+      const x=document.createElement('button');x.textContent='Delete';x.onclick=async()=>{if(confirm('Delete '+n+'?')){await post('/api/faxdelete',{f:n});$('faxcv').className='hide';loadFax()}};p.appendChild(x);
+      d.appendChild(p)}
   }catch(e){}
+}
+// The picture is drawn here from its bytes, so that it shows whatever the browser thinks of BMP files
+async function showFax(n){
+  const b=new Uint8Array(await (await fetch('/fax?f='+encodeURIComponent(n))).arrayBuffer());
+  const dv=new DataView(b.buffer),off=dv.getUint32(10,true),w=dv.getInt32(18,true);
+  const h=Math.floor((b.length-off)/w);if(!(w>0&&h>0))return;
+  const c=$('faxcv');c.width=w;c.height=h;const g=c.getContext('2d'),im=g.createImageData(w,h);
+  for(let i=0;i<w*h;i++){const v=b[off+i];im.data[4*i]=im.data[4*i+1]=im.data[4*i+2]=v;im.data[4*i+3]=255}
+  g.putImageData(im,0,0);c.className='';c.scrollIntoView()
 }
 function save(e){e.preventDefault();post('/api/settings',{call:$('call').value,grid:$('grid').value,
   gridauto:$('gridauto').checked?1:0,dial:$('dial').value,txhz:$('txhz').value})}
@@ -418,6 +431,24 @@ void handleFax()
     server.send(404, "text/plain", "No such picture");
 }
 
+void handleFaxDelete()
+{
+    String name = server.arg("f");
+    if (name.length() == 0 || name.indexOf('/') >= 0 || name.indexOf("..") >= 0) {
+        server.send(400, "text/plain", "Bad file name");
+        return;
+    }
+    if (ui::isSavingFax(name.c_str())) {
+        server.send(200, "text/plain", "This picture is being saved right now");
+        return;
+    }
+    String path = String(ui::kFaxDir) + "/" + name;
+    instance.lockSPI();
+    bool ok = SD.cardType() != CARD_NONE && SD.remove(path);
+    instance.unlockSPI();
+    server.send(200, "text/plain", ok ? "Deleted" : "No such picture");
+}
+
 void handleLog()
 {
     // The card shares the SPI bus with the display, which is drawn from this same thread
@@ -465,6 +496,7 @@ void start()
     server.on("/api/send", HTTP_POST, handleSend);
     server.on("/api/fax", HTTP_GET, handleFaxList);
     server.on("/fax", HTTP_GET, handleFax);
+    server.on("/api/faxdelete", HTTP_POST, handleFaxDelete);
     server.begin();
     active = true;
     Serial.printf("[web] access point %s, %s\n", kSsid, addr);

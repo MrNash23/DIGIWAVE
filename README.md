@@ -101,14 +101,22 @@ Artwork in `DIGIWAVE_Firmware_Grafiken` is converted with `python3 tools/make_as
 
 ## Operating
 
+The same everywhere:
+
 | | |
 | --- | --- |
-| Wheel | select a tile, a station or a setting; in CW it moves the receive window |
-| Wheel press | open, answer the selected station, edit a setting |
-| Backspace | back |
+| Wheel | select or tune: a tile, a station, the CW receive window, the RTTY tones |
+| Wheel press | in the menu: open. In a mode: the list of its functions, with the keys that do the same directly |
+| Enter | the main action of the mode: call the selected station, send the typed line, start or stop saving a picture |
+| Backspace | one step back: typed text first, then the open list or page, then from the mode to the menu |
 | Space + key | digits and symbols |
 
-The line at the bottom of each screen lists the keys of that screen.
+FT8 and FT4 keep a line with their keys at the bottom of the screen; the other
+modes use the whole screen for text, spectrum or picture.
+
+Received WEFAX pictures are saved to the SD card, can be looked at on the pager
+(WEFAX functions, "Saved pictures") and are shown, downloaded and deleted on
+the phone page.
 
 ## Layout of the repository
 
