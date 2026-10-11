@@ -145,7 +145,7 @@ void faxRephase();
 // --- SSTV --------------------------------------------------------------------------
 
 constexpr int kSstvWidth = 320;
-constexpr int kSstvMaxLines = 496;
+constexpr int kSstvMaxLines = 256;
 constexpr int kSstvFormats = 7;  // formats that can be chosen by hand, see sstvFormatName()
 
 struct SstvLine {
@@ -157,6 +157,7 @@ struct SstvState {
     bool receiving;
     char format[12];   // of the picture being received or received last
     int line, lines;
+    int good_lines;    // lines delivered
 };
 
 /// Fetches the next picture line. Returns false if none is waiting.

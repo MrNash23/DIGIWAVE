@@ -14,8 +14,8 @@ constexpr int kSstvModes = 8;
 struct SstvInfo {
     const char *name;
     uint8_t vis;    // code in the header
-    int lines;      // picture lines
-    float line_ms;  // duration of one transmitted line (PD: of the pair of picture lines it carries)
+    int lines;      // lines delivered (PD: half of the 496 sent, see sstv.cpp)
+    float line_ms;  // duration of one transmitted line
 };
 
 const SstvInfo &sstvInfo(SstvMode mode);
@@ -37,12 +37,17 @@ public:
     void onLine(LineFn fn, void *ctx);
     void feed(const int16_t *samples, size_t count);
 
-    /// A picture began (header read or start() aligned) or ended since the last call.
+    /// A picture began or ended since the last call. It begins with its header,
+    /// or - if that was missed or unreadable - once the rhythm of its
+    /// synchronisation pulses has shown the format, or with start().
     Event takeEvent();
 
     /// Format of the picture being received, None between pictures.
     SstvMode mode() const { return _mode; }
     int line() const { return _line; }
+
+    /// Lines delivered so far.
+    int goodLines() const { return _good; }
 
     /// Receives a picture whose header was missed: waits for the next
     /// synchronisation pulse and takes it as the start of a line.
@@ -55,7 +60,7 @@ private:
     void readVis();
     void beginPicture(SstvMode mode, double first_line);
     void decodeLine();
-    void trackSync(double expected);
+    bool trackSync(double expected);
 
     int _rate = 12000;
     double _per_ms = 12;
@@ -67,10 +72,12 @@ private:
     int _fpos = 0;
     float _prev_i = 0, _prev_q = 0;
 
-    // The demodulated frequency of the last second and a bit, by sample number
-    float *_f = nullptr;
+    // The turn of the phase from each sample to the next, as a vector, for the
+    // last second and a bit, by sample number
+    float *_dot = nullptr, *_cross = nullptr;
     uint64_t _n = 0;
     float _smooth = 1900;
+    float _sdot = 1, _scross = 0;
 
     // Header
     int _leader = 0;         // samples of leader tone seen in a row
@@ -80,12 +87,23 @@ private:
     uint64_t _vis_at = 0;    // sample at which the code can be read, 0 if none is pending
     uint64_t _vis_start = 0;
 
+    // Pulses seen lately, for recognising a format by their rhythm
+    static constexpr int kPulses = 4;
+    static constexpr int kPulseWindow = 54;  // 4.5 ms at 12 kHz, a little shorter than the shortest pulse
+    float _pi[kPulseWindow]{}, _pq[kPulseWindow]{}, _pp[kPulseWindow]{};
+    float _wi = 0, _wq = 0, _wp = 0, _pphi = 0;
+    int _ppos = 0;
+    bool _in_pulse = false;
+    uint64_t _pulse_from = 0;
+    double _pulse_at[kPulses] = {0, 0, 0, 0};
+
     // Waiting for a pulse after start()
     SstvMode _hunt = SstvMode::None;
     int _pulse = 0;
 
     SstvMode _mode = SstvMode::None;
     int _line = 0;           // next picture line to deliver
+    int _good = 0;
     double _line_start = 0;  // sample at which the transmitted line begins
     uint8_t *_chroma = nullptr;  // Robot 36: the colour difference of the line before, and its brightness
     uint8_t *_row = nullptr;

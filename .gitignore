@@ -13,3 +13,6 @@ DigiWave-Productshots/
 
 # Pictures used for testing
 wefax-testbilder/
+
+# Generated test audio
+testsignale/

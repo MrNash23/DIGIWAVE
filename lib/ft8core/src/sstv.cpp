@@ -4,13 +4,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(ESP32)
+#include <esp_heap_caps.h>
+#endif
+
 namespace digi {
 
 namespace {
 
 constexpr float kTwoPi = 6.28318530718f;
 constexpr float kSyncHz = 1200, kBlackHz = 1500, kWhiteHz = 2300, kLeaderHz = 1900;
-constexpr int kRing = 16384;  // samples of demodulated frequency kept; a power of two
+constexpr int kRing = 16384;  // samples kept; a power of two
+
+/// The buffers are large for the internal memory of the device; there they go to the external one.
+void *bigAlloc(size_t bytes)
+{
+#if defined(ESP32)
+    return heap_caps_malloc_prefer(bytes, 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_DEFAULT | MALLOC_CAP_8BIT);
+#else
+    return malloc(bytes);
+#endif
+}
 
 // Line layout in milliseconds. Martin and Scottie send green, blue, red;
 // Robot and PD send brightness and colour differences.
@@ -25,8 +39,10 @@ const SstvInfo kInfo[kSstvModes] = {
     {"Scottie 1", 60, 256, 428.220f},
     {"Scottie 2", 56, 256, 277.692f},
     {"Robot 36", 8, 240, 150.0f},
-    {"PD 120", 95, 496, 508.480f},
-    {"PD 180", 96, 496, 754.240f},
+    // PD pictures have 640 x 496 pixels. Delivered 320 wide, they keep their shape with
+    // half the lines: the two picture lines each transmitted line carries become one.
+    {"PD 120", 95, 248, 508.480f},
+    {"PD 180", 96, 248, 754.240f},
 };
 
 const Timing kTiming[kSstvModes] = {
@@ -75,6 +91,26 @@ void toRgb(uint8_t y, uint8_t ry, uint8_t by, uint8_t *rgb)
     rgb[2] = clamp8((c + 516.411f * (by - 128)) / 256);
 }
 
+/// Colour changes more slowly across a line than brightness does and is sent
+/// with less room; smoothing it takes out much of the coloured noise.
+void smooth(uint8_t *v)
+{
+    static uint8_t out[kSstvWidth];
+    for (int x = 0; x < kSstvWidth; ++x) {
+        int sum = 0, weight = 0;
+        for (int d = -3; d <= 3; ++d) {
+            int at = x + d;
+            if (at >= 0 && at < kSstvWidth) {
+                int w = 4 - (d < 0 ? -d : d);
+                sum += w * v[at];
+                weight += w;
+            }
+        }
+        out[x] = (uint8_t)((sum + weight / 2) / weight);
+    }
+    memcpy(v, out, kSstvWidth);
+}
+
 void fromRgb(const uint8_t *rgb, uint8_t *y, uint8_t *ry, uint8_t *by)
 {
     float r = rgb[0], g = rgb[1], b = rgb[2];
@@ -104,25 +140,28 @@ SstvMode sstvModeForVis(uint8_t vis)
 
 SstvDecoder::~SstvDecoder()
 {
-    free(_f);
+    free(_dot);
+    free(_cross);
     free(_chroma);
     free(_row);
 }
 
 bool SstvDecoder::begin(int sample_rate)
 {
-    if (_f == nullptr) {
-        _f = (float *)malloc(kRing * sizeof(float));
+    if (_dot == nullptr) {
+        _dot = (float *)bigAlloc(kRing * sizeof(float));
+        _cross = (float *)bigAlloc(kRing * sizeof(float));
         _chroma = (uint8_t *)malloc(2 * kSstvWidth);
         _row = (uint8_t *)malloc(2 * 3 * kSstvWidth);
     }
-    if (_f == nullptr || _chroma == nullptr || _row == nullptr) {
+    if (_dot == nullptr || _cross == nullptr || _chroma == nullptr || _row == nullptr) {
         return false;
     }
     _rate = sample_rate;
     _per_ms = sample_rate / 1000.0;
     for (int i = 0; i < kRing; ++i) {
-        _f[i] = kLeaderHz;
+        _dot[i] = 1;
+        _cross[i] = 0;
     }
     _phi = 0;
     memset(_bi, 0, sizeof(_bi));
@@ -134,10 +173,22 @@ bool SstvDecoder::begin(int sample_rate)
     _prev_i = _prev_q = 0;
     _n = 0;
     _smooth = kLeaderHz;
+    _sdot = 1;
+    _scross = 0;
     _leader = _leader_at_drop = _start_run = _since_leader = 0;
     _vis_at = 0;
     _hunt = SstvMode::None;
     _pulse = 0;
+    _wi = _wq = _wp = 0;
+    _pphi = 0;
+    _ppos = 0;
+    memset(_pi, 0, sizeof(_pi));
+    memset(_pq, 0, sizeof(_pq));
+    memset(_pp, 0, sizeof(_pp));
+    _in_pulse = false;
+    for (double &p : _pulse_at) {
+        p = 0;
+    }
     _mode = SstvMode::None;
     _line = 0;
     _event = Event::None;
@@ -173,18 +224,23 @@ void SstvDecoder::stop()
     _hunt = SstvMode::None;
 }
 
-/// Mean frequency between two sample numbers (which must still be in the ring).
+/// Frequency between two sample numbers (which must still be in the ring).
+/// The turns of the phase are added up as vectors before the angle is taken:
+/// strong samples count for more than weak ones, so that fades and echoes,
+/// where the phase jumps about, spoil the result far less than a plain mean
+/// of per-sample frequencies would.
 float SstvDecoder::mean(double from, double to) const
 {
     int64_t a = (int64_t)floor(from + 0.5), b = (int64_t)floor(to + 0.5);
     if (b <= a) {
         b = a + 1;
     }
-    float sum = 0;
+    float dot = 0, cross = 0;
     for (int64_t i = a; i < b; ++i) {
-        sum += _f[(uint64_t)i & (kRing - 1)];
+        dot += _dot[(uint64_t)i & (kRing - 1)];
+        cross += _cross[(uint64_t)i & (kRing - 1)];
     }
-    return sum / (float)(b - a);
+    return kLeaderHz + atan2f(cross, dot) * _rate / kTwoPi;
 }
 
 /// One scan of a line: kSstvWidth values from the stretch that begins at from and lasts ms.
@@ -201,6 +257,7 @@ void SstvDecoder::beginPicture(SstvMode mode, double first_line)
     _mode = mode;
     _hunt = SstvMode::None;
     _line = 0;
+    _good = 0;
     _line_start = first_line;
     _event = Event::Start;
 }
@@ -210,9 +267,13 @@ void SstvDecoder::readVis()
 {
     const double bit = 30 * _per_ms;
     int code = 0, ones = 0;
+    // Start and stop bit are at 1200 Hz, between the two tones of the bits. Measured the
+    // same way, they give the threshold - also when noise shifts all readings alike.
+    double start = (double)_vis_start + bit * 0.5, stop = (double)_vis_start + bit * 9.5;
+    float threshold = (mean(start - 8 * _per_ms, start + 8 * _per_ms) + mean(stop - 8 * _per_ms, stop + 8 * _per_ms)) / 2;
     for (int k = 0; k < 8; ++k) {
         double centre = (double)_vis_start + bit * (1.5 + k);
-        bool one = mean(centre - 8 * _per_ms, centre + 8 * _per_ms) < kSyncHz;  // 1100 Hz is a one, 1300 Hz a zero
+        bool one = mean(centre - 8 * _per_ms, centre + 8 * _per_ms) < threshold;  // 1100 Hz is a one, 1300 Hz a zero
         ones += one;
         if (k < 7 && one) {
             code |= 1 << k;
@@ -230,27 +291,31 @@ void SstvDecoder::readVis()
     beginPicture(mode, first);
 }
 
-/// Pulls the line clock towards a synchronisation pulse found near where it is expected.
-void SstvDecoder::trackSync(double expected)
+/// Pulls the line clock towards a synchronisation pulse found near where it is
+/// expected. Returns false if there is no pulse.
+bool SstvDecoder::trackSync(double expected)
 {
     const Timing &t = kTiming[(int)_mode];
     const double len = t.sync * _per_ms, window = 6 * _per_ms;
     int64_t a = (int64_t)(expected - window), b = (int64_t)(expected + len + window);
     double sum = 0;
     int count = 0;
+    // Judged over half a millisecond at a time, which is steadier than single samples
+    const int span = (int)(0.5 * _per_ms);
     for (int64_t i = a; i < b; ++i) {
-        if (_f[(uint64_t)i & (kRing - 1)] < 1350) {
+        if (mean((double)(i - span / 2), (double)(i + span / 2 + 1)) < 1350) {
             sum += (double)i;
             ++count;
         }
     }
     if (count < 0.6 * len || count > 1.5 * len) {
-        return;  // no clear pulse: keep the clock as it is
+        return false;  // no clear pulse: keep the clock as it is
     }
     double error = sum / count + 0.5 - (expected + len / 2);
     if (fabs(error) < window) {
         _line_start += 0.25 * error;
     }
+    return true;
 }
 
 void SstvDecoder::decodeLine()
@@ -268,19 +333,20 @@ void SstvDecoder::decodeLine()
         scan(at + t.scan * ms, t.scan, b);
         scan(at + 2 * t.scan * ms, t.scan, c);
         scan(at + 3 * t.scan * ms, t.scan, d);
+        smooth(b);
+        smooth(c);
         for (int x = 0; x < kSstvWidth; ++x) {
-            toRgb(a[x], b[x], c[x], rgb + 3 * x);
-            toRgb(d[x], b[x], c[x], rgb + 3 * (kSstvWidth + x));
+            toRgb((uint8_t)((a[x] + d[x] + 1) / 2), b[x], c[x], rgb + 3 * x);
         }
         if (_fn != nullptr) {
             _fn(_line, rgb, _ctx);
-            _fn(_line + 1, rgb + 3 * kSstvWidth, _ctx);
         }
-        _line += 2;
+        ++_line;
     } else if (_mode == SstvMode::Robot36) {
         // Brightness on every line; red difference on even lines, blue difference on odd ones
         scan(s + (t.sync + t.porch) * ms, t.scan, a);
         scan(s + (t.sync + t.porch + t.scan + 4.5 + 1.5) * ms, t.scan / 2, b);
+        smooth(b);
         if ((_line & 1) == 0) {
             memcpy(_chroma, a, kSstvWidth);
             memcpy(_chroma + kSstvWidth, b, kSstvWidth);
@@ -328,6 +394,10 @@ void SstvDecoder::decodeLine()
     } else {
         trackSync(s + line_len);
     }
+    // The picture runs to its last line also when the signal fades: pulses and tone can be
+    // hidden by echoes or noise while the picture is still readable, so neither is a safe
+    // sign that the transmission is over. stop() ends it by hand.
+    _good = _line;
     _line_start += line_len;
     if (_line >= info.lines) {
         _mode = SstvMode::None;
@@ -337,7 +407,7 @@ void SstvDecoder::decodeLine()
 
 void SstvDecoder::feed(const int16_t *samples, size_t count)
 {
-    if (_f == nullptr) {
+    if (_dot == nullptr) {
         return;
     }
     const float dphi = kTwoPi * kLeaderHz / _rate;
@@ -364,15 +434,19 @@ void SstvDecoder::feed(const int16_t *samples, size_t count)
         float dot = fi * _prev_i + fq * _prev_q, cross = fq * _prev_i - fi * _prev_q;
         _prev_i = fi;
         _prev_q = fq;
-        float hz = kLeaderHz + atan2f(cross, dot) * _rate / kTwoPi;
         // The filters delay the signal by five samples; the ring is written in step with the input,
         // and all timing is relative, so the delay cancels out
-        _f[_n & (kRing - 1)] = hz;
+        _dot[_n & (kRing - 1)] = dot;
+        _cross[_n & (kRing - 1)] = cross;
         ++_n;
-        _smooth += 0.08f * (hz - _smooth);
+        // For header and pulses: the frequency over the last two milliseconds
+        _sdot += 0.04f * (dot - _sdot);
+        _scross += 0.04f * (cross - _scross);
+        float hz = kLeaderHz + atan2f(_scross, _sdot) * _rate / kTwoPi;
+        _smooth = hz;
 
         // --- header: a long leader tone, then the start bit ---
-        if (fabsf(_smooth - kLeaderHz) < 90) {
+        if (fabsf(_smooth - kLeaderHz) < 110) {
             ++_leader;
             _since_leader = 0;
             _start_run = 0;
@@ -389,7 +463,7 @@ void SstvDecoder::feed(const int16_t *samples, size_t count)
                 ++_start_run;
                 // 25 ms of the start bit make it one; the 10 ms break inside the leader does not
                 if (_start_run == (int)(25 * _per_ms) && _leader_at_drop >= (int)(200 * _per_ms) && _vis_at == 0) {
-                    _vis_start = _n - (uint64_t)_start_run - 12;  // the smoothing lags by about a millisecond
+                    _vis_start = _n - (uint64_t)_start_run - 36;  // the smoothing lags; measured on recordings from the air
                     _vis_at = _vis_start + (uint64_t)(300 * _per_ms) + 16;
                 }
             } else if (_start_run > 0) {
@@ -403,7 +477,61 @@ void SstvDecoder::feed(const int16_t *samples, size_t count)
             readVis();
         }
 
-        // --- a picture without header: align on the next pulse ---
+        // --- a picture whose header was missed or unreadable: the rhythm of its pulses ---
+        // Every format repeats its synchronisation pulse at its own interval. Three pulses
+        // at the interval of a format (one may be missing in between) start a picture of
+        // that format. This also works when noise or echoes have spoilt the header.
+        {
+            // A pulse is found by how much of the power in the window sits at 1200 Hz. That
+            // holds in noise, where the measured frequency is pulled towards the middle of
+            // the band and a 1200 Hz tone no longer reads as one.
+            _pphi += kTwoPi * (kLeaderHz - kSyncHz) / _rate;  // turns the pulse tone to zero
+            if (_pphi > kTwoPi) {
+                _pphi -= kTwoPi;
+            }
+            float pi_ = fi * cosf(_pphi) - fq * sinf(_pphi), pq_ = fi * sinf(_pphi) + fq * cosf(_pphi);
+            float power = fi * fi + fq * fq;
+            _wi += pi_ - _pi[_ppos];
+            _wq += pq_ - _pq[_ppos];
+            _wp += power - _pp[_ppos];
+            _pi[_ppos] = pi_;
+            _pq[_ppos] = pq_;
+            _pp[_ppos] = power;
+            _ppos = (_ppos + 1) % kPulseWindow;
+            const int w = kPulseWindow;
+            float share = _wp > 1e-9f ? (_wi * _wi + _wq * _wq) / (w * _wp) : 0;
+            float tone = share > 0.5f ? 1200.0f : (share < 0.3f ? 1900.0f : 1350.0f);
+            if (!_in_pulse && tone < 1290) {
+                _in_pulse = true;
+                _pulse_from = _n;
+            } else if (_in_pulse && tone > 1400) {
+                _in_pulse = false;
+                double length = (double)(_n - _pulse_from);
+                if (length >= 3 * _per_ms && length <= 40 * _per_ms) {
+                    // The window sees the pulse half its own length late
+                    for (int k = kPulses - 1; k > 0; --k) {
+                        _pulse_at[k] = _pulse_at[k - 1];
+                    }
+                    _pulse_at[0] = (double)_pulse_from - w / 2.0;
+                    if (_mode == SstvMode::None && _vis_at == 0 && _hunt == SstvMode::None) {
+                        const double tolerance = 1.2 * _per_ms;
+                        double d1 = _pulse_at[0] - _pulse_at[1], d2 = _pulse_at[1] - _pulse_at[2];
+                        for (int m = 1; m < kSstvModes && _mode == SstvMode::None; ++m) {
+                            double period = kInfo[m].line_ms * _per_ms;
+                            auto fits = [&](double d) { return fabs(d - period) < tolerance || fabs(d - 2 * period) < tolerance; };
+                            if (_pulse_at[2] > 0 && fits(d1) && fits(d2)) {
+                                const Timing &t = kTiming[m];
+                                double at = _pulse_at[0];
+                                // Scottie has its pulse before the red scan; the next line begins after that scan
+                                beginPicture((SstvMode)m, isScottie((SstvMode)m) ? at + (t.sync + t.porch + t.scan) * _per_ms : at);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- a picture without header, format given by hand: align on the next pulse ---
         if (_hunt != SstvMode::None) {
             const Timing &t = kTiming[(int)_hunt];
             if (hz < 1350) {
@@ -413,7 +541,7 @@ void SstvDecoder::feed(const int16_t *samples, size_t count)
                 if (_pulse > 0.6 * len && _pulse < 1.6 * len) {
                     // The pulse just ended; the line it belongs to began where the pulse did,
                     // or for Scottie two scans earlier - there the next line starts after the red scan
-                    double pulse_start = (double)_n - _pulse - 1;
+                    double pulse_start = (double)_n - _pulse - 22;  // less the lag of the smoothing
                     double first = isScottie(_hunt) ? pulse_start + (t.sync + t.porch + t.scan) * _per_ms : pulse_start;
                     beginPicture(_hunt, first);
                 }
@@ -505,15 +633,15 @@ bool SstvEncoder::next()
     char kind = layout[element];
     if (kind == '\0') {
         _step = 14;
-        _line += isPd(_mode) ? 2 : 1;
+        ++_line;
         return next();
     }
     if (kind >= '0' && kind <= '7') {
         // A scan: one tone per pixel. 0 green, 1 blue, 2 red, 3 brightness, 4 colour of this
         // Robot line, 5 red difference, 6 blue difference, 7 brightness of the second PD line
         double ms = (kind == '4' ? t.scan / 2 : t.scan) / kSstvWidth;
-        uint8_t rgb[3] = {0, 0, 0}, rgb2[3] = {0, 0, 0}, y, ry, by, y2, ry2, by2;
-        _fn(_pixel, kind == '7' ? _line + 1 : _line, rgb, _ctx);
+        uint8_t rgb[3] = {0, 0, 0}, y, ry, by;
+        _fn(_pixel, _line, rgb, _ctx);
         fromRgb(rgb, &y, &ry, &by);
         uint8_t v = 0;
         switch (kind) {
@@ -524,10 +652,8 @@ bool SstvEncoder::next()
         case '7': v = y; break;
         case '4': v = (_line & 1) ? by : ry; break;
         default:
-            // PD: the colour differences are the mean of the two lines
-            _fn(_pixel, _line + 1, rgb2, _ctx);
-            fromRgb(rgb2, &y2, &ry2, &by2);
-            v = kind == '5' ? (uint8_t)((ry + ry2) / 2) : (uint8_t)((by + by2) / 2);
+            // PD: both picture lines of a transmitted line are sent alike here
+            v = kind == '5' ? ry : by;
             break;
         }
         tone(toneOf(v), ms);

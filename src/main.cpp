@@ -98,7 +98,7 @@ void pollSerialCommands()
                                   (unsigned)(millis() - t0), (unsigned)ESP.getFreePsram(), (unsigned)ESP.getMinFreePsram(),
                                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
                 } else if (line[0] == 'r') {
-                    engine::capture((size_t)constrain(atoi(line + 2), 1, 10) * 12000);
+                    engine::capture((size_t)constrain(atoi(line + 2), 1, 60) * 12000);
                     recording = true;
                 } else if (line[0] == 's') {
                     Serial.printf("[dw] send: %s\n", ui::submitText(line + 2) ? "queued" : "mode cannot send");

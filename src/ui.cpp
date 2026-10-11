@@ -1105,6 +1105,7 @@ bool sstv_dirty = true;
 int sstv_manual = 0;            // format used when a picture is started by hand
 char sstv_format[12] = "";
 char sstv_name[40] = "";
+bool sstv_ended = false;
 
 void buildSstv()
 {
@@ -1224,11 +1225,7 @@ void processSstv()
         break;
     }
     case engine::SstvEvent::End:
-        if (sstv_auto) {
-            saveSstvIfUnsaved();
-        } else {
-            showNotice("Picture complete - Enter saves it");
-        }
+        sstv_ended = true;  // handled below, once the last lines have been taken
         break;
     default:
         break;
@@ -1248,6 +1245,25 @@ void processSstv()
         sstv_dirty = true;
         if (sstv_follow) {
             sstv_top = max(0, sstv_have - kFaxHeight);
+        }
+    }
+
+    if (sstv_ended) {
+        sstv_ended = false;
+        // Lines the receiver did not stand behind are dropped
+        int good = engine::sstvState().good_lines;
+        if (good < sstv_have) {
+            if (sstv_img != nullptr) {
+                memset(sstv_img + (size_t)good * engine::kSstvWidth, 0, (size_t)(sstv_have - good) * engine::kSstvWidth * sizeof(uint16_t));
+            }
+            sstv_have = good;
+            sstv_top = max(0, sstv_have - kFaxHeight);
+            sstv_dirty = true;
+        }
+        if (sstv_auto) {
+            saveSstvIfUnsaved();
+        } else {
+            showNotice("Picture complete - Enter saves it");
         }
     }
 }

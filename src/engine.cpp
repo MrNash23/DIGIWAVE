@@ -626,6 +626,7 @@ void stepSstv(int16_t *pcm)
             sstv_st.lines = digi::sstvInfo(m).lines;
             sstv_st.line = sstv_rx.line();
         }
+        sstv_st.good_lines = sstv_rx.goodLines();
         st.locked = sstv_st.receiving;
     }
     if (event != SstvEvent::None) {
