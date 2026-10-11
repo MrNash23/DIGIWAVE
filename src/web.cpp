@@ -289,9 +289,14 @@ void handleAnswer()
     for (int i = 0; i < n; ++i) {
         const engine::Entry &e = hist[i];
         if (e.slot_utc == slot && (int)e.msg.freq == freq && e.msg.call_de[0] != '\0' && strcmp(e.msg.call_de, settings.call) != 0) {
+            // As on the device: answering switches TX on
+            if (!timebase::valid()) {
+                server.send(200, "text/plain", "No time source - cannot transmit");
+                return;
+            }
             engine::answer(e);
-            String reply = String("Calling ") + e.msg.call_de + (engine::status().tx_enabled ? "" : " - TX is off");
-            server.send(200, "text/plain", reply);
+            engine::setTxEnabled(true);
+            server.send(200, "text/plain", String("Calling ") + e.msg.call_de + " - TX is on");
             return;
         }
     }

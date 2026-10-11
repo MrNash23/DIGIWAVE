@@ -478,9 +478,15 @@ void slotPress()
         showNotice("No station to answer in this message");
         return;
     }
+    // Answering a station is a decision to transmit: TX is switched on with it
+    if (!timebase::valid()) {
+        showNotice("No time source - cannot transmit");
+        return;
+    }
     engine::answer(e);
+    engine::setTxEnabled(true);
     char text[56];
-    snprintf(text, sizeof(text), "Calling %s%s", e.msg.call_de, engine::status().tx_enabled ? "" : "  -  TX is off (T)");
+    snprintf(text, sizeof(text), "Calling %s  -  TX is on, H stops", e.msg.call_de);
     showNotice(text);
 }
 
