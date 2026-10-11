@@ -46,6 +46,8 @@ digi::WefaxDecoder fax_rx;
 // Guarded by lock
 Entry hist[kHistory];
 int hist_count = 0;
+Entry qso_hist[kQsoHistory];
+int qso_hist_count = 0;
 Status st{};
 
 // Copies of the settings the task needs, so that it never reads them while the UI edits
@@ -256,19 +258,33 @@ void rememberGrid(const char *call, const char *grid)
     strcpy(k->grid, grid);
 }
 
+/// Adds an entry to the history, and to that of the own contact if it belongs there. Call with the lock held.
+void appendEntry(const Entry &e)
+{
+    if (hist_count == kHistory) {
+        memmove(hist, hist + 1, sizeof(Entry) * (kHistory - 1));
+        --hist_count;
+    }
+    hist[hist_count++] = e;
+    if (ft8::belongsToQso(e.msg, e.own, cfg.my_call, qso.dxCall())) {
+        if (qso_hist_count == kQsoHistory) {
+            memmove(qso_hist, qso_hist + 1, sizeof(Entry) * (kQsoHistory - 1));
+            --qso_hist_count;
+        }
+        qso_hist[qso_hist_count++] = e;
+    }
+}
+
 void pushHistory(const ft8::Decoded *list, int count, uint32_t slot_utc, int parity)
 {
     Guard g;
     for (int i = 0; i < count; ++i) {
-        if (hist_count == kHistory) {
-            memmove(hist, hist + 1, sizeof(Entry) * (kHistory - 1));
-            --hist_count;
-        }
-        Entry &e = hist[hist_count++];
+        Entry e{};
         e.msg = list[i];
         e.slot_utc = slot_utc;
         e.parity = parity;
         e.to_me = cfg.my_call[0] != '\0' && strcmp(list[i].call_to, cfg.my_call) == 0;
+        e.own = false;
         e.grid[0] = '\0';
         e.country = "";
         if (e.msg.call_de[0] != '\0') {
@@ -282,6 +298,7 @@ void pushHistory(const ft8::Decoded *list, int count, uint32_t slot_utc, int par
             e.country = (cfg.cb_mode && ft8::isCbCallsign(e.msg.call_de)) ? ft8::cbCountryForCall(e.msg.call_de)
                                                                           : ft8::countryForCall(e.msg.call_de);
         }
+        appendEntry(e);
     }
     st.decoded = count;
     ++st.history_seq;
@@ -293,7 +310,7 @@ void refreshQsoStatus()
     strncpy(st.dx_call, qso.dxCall(), sizeof(st.dx_call) - 1);
 }
 
-void transmitSlot(const char *text, ft8::Protocol protocol, ft8::Packing packing)
+void transmitSlot(const char *text, ft8::Protocol protocol, ft8::Packing packing, uint32_t slot_utc, int parity)
 {
     static int16_t buf[kChunk];
     int hz;
@@ -310,6 +327,17 @@ void transmitSlot(const char *text, ft8::Protocol protocol, ft8::Packing packing
     {
         Guard g;
         strncpy(st.tx_text, text, sizeof(st.tx_text) - 1);
+        // What goes on the air is listed with what is heard
+        Entry e{};
+        strncpy(e.msg.text, text, sizeof(e.msg.text) - 1);
+        ft8::parseMessage(e.msg);
+        e.msg.freq = (float)hz;
+        e.slot_utc = slot_utc;
+        e.parity = parity;
+        e.own = true;
+        e.country = "";
+        appendEntry(e);
+        ++st.history_seq;
     }
     halt_request = false;
     pttOn();
@@ -367,7 +395,7 @@ void stepSlotMode(Mode m, int16_t *pcm)
             refreshQsoStatus();
         }
         if (send) {
-            transmitSlot(text, protocol, packing);
+            transmitSlot(text, protocol, packing, (uint32_t)(this_slot * pi.slot_ms / 1000), (int)(this_slot & 1));
             slot_state.decoded = true;  // nothing useful was received in this slot
             return;
         }
@@ -571,6 +599,7 @@ void enterMode(Mode m, bool mode_changed)
             Guard g;
             qso.halt();
             hist_count = 0;
+            qso_hist_count = 0;
             ++st.history_seq;
             st.decoded = 0;
             refreshQsoStatus();
@@ -787,6 +816,14 @@ int history(Entry *out, int max)
     return n;
 }
 
+int qsoHistory(Entry *out, int max)
+{
+    Guard g;
+    int n = min(max, qso_hist_count);
+    memcpy(out, qso_hist + (qso_hist_count - n), sizeof(Entry) * n);
+    return n;
+}
+
 void setTxEnabled(bool on)
 {
     Guard g;
@@ -809,8 +846,24 @@ void startCq()
 void answer(const Entry &e)
 {
     Guard g;
+    if (e.own) {
+        return;
+    }
     qso.answer(e.msg, e.parity, (uint32_t)(timebase::utcMs() / 1000));
     refreshQsoStatus();
+    // The message being answered opens the view of the contact, unless it is in it already
+    bool listed = false;
+    for (int i = 0; i < qso_hist_count && !listed; ++i) {
+        listed = qso_hist[i].slot_utc == e.slot_utc && strcmp(qso_hist[i].msg.text, e.msg.text) == 0;
+    }
+    if (!listed) {
+        if (qso_hist_count == kQsoHistory) {
+            memmove(qso_hist, qso_hist + 1, sizeof(Entry) * (kQsoHistory - 1));
+            --qso_hist_count;
+        }
+        qso_hist[qso_hist_count++] = e;
+        ++st.history_seq;
+    }
 }
 
 bool nextLogItem(LogItem *item)

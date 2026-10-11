@@ -4,6 +4,7 @@
 #include <LV_Helper.h>
 #include <SD.h>
 
+#include <band_plan.h>
 #include <ft8_adif.h>
 
 #include "assets/assets.h"
@@ -42,13 +43,14 @@ const lv_color_t kColWarn = lv_color_hex(0xE0A020);
 const lv_color_t kColAccent = lv_color_hex(0x3766FF);
 const lv_color_t kColFrame = lv_color_hex(0x202D7A);
 
-enum class Screen { Home, Slot, Text, Fax, Log, Setup };
+enum class Screen { Home, Slot, Text, Fax, Log, Setup, Band };
 Screen screen = Screen::Home;
 
 void openHome();
 void openMode(Mode m);
 void openLog();
 void openSetup();
+void openBand();
 void powerDown(const char *reason);
 
 // --- widgets shared by the mode screens ------------------------------------------
@@ -292,6 +294,16 @@ int selected = -1;
 bool follow = true;
 uint32_t history_seq = 0;
 
+// The list shows everything heard, or only the own contact. It turns to the
+// contact by itself while one is going on; V switches by hand.
+enum class ListView { All, Qso };
+ListView list_view = ListView::All;
+bool view_by_hand = false;
+bool contact_active = false;
+uint32_t contact_ended = 0;
+const lv_color_t kColOwn = lv_color_hex(0xFFD23C);     // our own transmissions
+const lv_color_t kColOwnBg = lv_color_hex(0x2A2408);
+
 void buildSlot()
 {
     scr_slot = makeScreen();
@@ -317,7 +329,7 @@ void reloadHistory(uint32_t seq)
     if (had_selection) {
         previous = entries[selected];
     }
-    entry_count = engine::history(entries, engine::kHistory);
+    entry_count = list_view == ListView::Qso ? engine::qsoHistory(entries, engine::kHistory) : engine::history(entries, engine::kHistory);
     history_seq = seq;
     if (had_selection) {
         selected = -1;
@@ -347,13 +359,24 @@ void drawList()
         int idx = top + i;
         if (idx >= entry_count) {
             lv_label_set_text(row_meta[i], "");
-            lv_label_set_text(row_msg[i], "");
+            // An empty contact view says so instead of looking broken
+            lv_label_set_text(row_msg[i], i == 0 && entry_count == 0 && list_view == ListView::Qso ? "No contact yet" : "");
+            lv_obj_set_style_text_color(row_msg[i], kColDim, 0);
             lv_label_set_text(row_info[i], "");
             lv_obj_set_style_bg_color(row_bg[i], kColBg, 0);
             continue;
         }
         const engine::Entry &e = entries[idx];
         uint32_t t = e.slot_utc;
+        if (e.own) {
+            lv_label_set_text_fmt(row_meta[i], "%02u%02u%02u   TX  %4d", (unsigned)(t / 3600 % 24), (unsigned)(t / 60 % 60),
+                                  (unsigned)(t % 60), (int)e.msg.freq);
+            lv_label_set_text(row_msg[i], e.msg.text);
+            lv_label_set_text(row_info[i], "");
+            lv_obj_set_style_text_color(row_msg[i], kColOwn, 0);
+            lv_obj_set_style_bg_color(row_bg[i], idx == selected ? kColSel : kColOwnBg, 0);
+            continue;
+        }
         lv_label_set_text_fmt(row_meta[i], "%02u%02u%02u  %+03d  %4d", (unsigned)(t / 3600 % 24), (unsigned)(t / 60 % 60),
                               (unsigned)(t % 60), e.msg.snr, (int)e.msg.freq);
         lv_label_set_text(row_msg[i], e.msg.text);
@@ -367,17 +390,48 @@ void drawList()
     }
 }
 
+void drawList();
+
+void setListView(ListView view)
+{
+    list_view = view;
+    follow = true;
+    selected = -1;
+    reloadHistory(history_seq);
+    drawList();
+}
+
 void drawSlot()
 {
     engine::Status st = engine::status();
     drawHeader(slot_header, st);
+
+    // Calling or working a station turns the list to the contact; some time after its end it turns back
+    bool active = st.transmitting || strcmp(st.qso_state, "Idle") != 0;
+    if (active != contact_active) {
+        contact_active = active;
+        view_by_hand = false;
+        if (active) {
+            if (list_view != ListView::Qso) {
+                setListView(ListView::Qso);
+            }
+        } else {
+            contact_ended = millis();
+        }
+    }
+    if (!active && !view_by_hand && list_view == ListView::Qso && millis() - contact_ended > 30000) {
+        setListView(ListView::All);
+    }
     int slot_ms = ft8::info(st.mode == Mode::FT4 ? ft8::Protocol::FT4 : ft8::Protocol::FT8).slot_ms;
     lv_bar_set_value(slot_header.slot, (int)(timebase::utcMs() % slot_ms) * 100 / slot_ms, LV_ANIM_OFF);
 
-    char name[12];
-    snprintf(name, sizeof(name), "%s%s", engine::modeName(st.mode), settings.cb_mode ? " CB" : "");
+    // Mode and the frequency the logbook will record
+    char name[28], mhz[12];
+    ft8::formatMhz(settings.dialHz(st.mode == Mode::FT4), mhz);
+    snprintf(name, sizeof(name), "%s%s %s", engine::modeName(st.mode), settings.cb_mode ? " CB" : "", mhz);
     if (st.transmitting) {
-        lv_label_set_text_fmt(slot_header.state, "%s TX  %s", name, st.tx_text);
+        // The message needs the room, so the frequency is left out while sending
+        lv_label_set_text_fmt(slot_header.state, "%s%s TX  %s", engine::modeName(st.mode), settings.cb_mode ? " CB" : "", st.tx_text);
         lv_obj_set_style_text_color(slot_header.state, kColTx, 0);
     } else {
         if (st.dx_call[0] != '\0' && strcmp(st.qso_state, "Idle") != 0) {
@@ -393,8 +447,8 @@ void drawSlot()
         lv_label_set_text(slot_footer, notice);
         lv_obj_set_style_text_color(slot_footer, kColWarn, 0);
     } else {
-        lv_label_set_text_fmt(slot_footer, "TX %s (T)   CQ (C)   Halt (H)   Log (L)   Setup (S)   Menu (M)   |  %d dec, %d ms",
-                              st.tx_enabled ? "ON" : "off", st.decoded, st.decode_ms);
+        lv_label_set_text_fmt(slot_footer, "TX %s (T)  CQ (C)  Halt (H)  Log (L)  Band (B)  View (V): %s  Menu (M)  |  %d dec",
+                              st.tx_enabled ? "ON" : "off", list_view == ListView::Qso ? "QSO" : "all", st.decoded);
         lv_obj_set_style_text_color(slot_footer, st.tx_enabled ? kColTx : kColDim, 0);
     }
 
@@ -420,7 +474,7 @@ void slotPress()
         return;
     }
     const engine::Entry &e = entries[selected];
-    if (e.msg.call_de[0] == '\0' || strcmp(e.msg.call_de, settings.call) == 0) {
+    if (e.own || e.msg.call_de[0] == '\0' || strcmp(e.msg.call_de, settings.call) == 0) {
         showNotice("No station to answer in this message");
         return;
     }
@@ -461,6 +515,13 @@ void slotKey(char c)
         break;
     case 'l':
         openLog();
+        break;
+    case 'b':
+        openBand();
+        break;
+    case 'v':
+        view_by_hand = true;
+        setListView(list_view == ListView::Qso ? ListView::All : ListView::Qso);
         break;
     case 'm':
         openHome();
@@ -990,14 +1051,11 @@ struct Field {
     const char *on, *off;
 };
 
-char dial_text[8];
-
 Field fields[] = {
     {"Callsign", Kind::Text, settings.call, sizeof(settings.call), Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"FT8/FT4 operation", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.cb_mode, "CB (11 m)", "amateur radio"},
     {"Locator from", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.grid_auto, "GPS", "manual entry"},
     {"Locator", Kind::Text, settings.grid, 5, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
-    {"Dial frequency", Kind::Text, dial_text, sizeof(dial_text), Chars::Digits, nullptr, 0, 0, 0, " kHz", nullptr, "", ""},
     {"FT8/FT4 TX frequency", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_hz, 300, 2800, 50, " Hz", nullptr, "", ""},
     {"FT8/FT4 max repeats", Kind::Number, nullptr, 0, Chars::Call, &settings.max_retries, 1, 20, 1, "", nullptr, "", ""},
     {"CW sending speed", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_wpm, 5, 40, 1, " WPM", nullptr, "", ""},
@@ -1071,7 +1129,6 @@ void drawSetup()
 
 void openSetup()
 {
-    snprintf(dial_text, sizeof(dial_text), "%u", (unsigned)settings.dial_khz);
     set_selected = 0;
     set_top = 0;
     editing = false;
@@ -1082,7 +1139,6 @@ void openSetup()
 
 void closeSetup()
 {
-    settings.dial_khz = (uint32_t)atol(dial_text);
     settings.save();
     engine::applySettings();
     extensionPortPtt(settings.ptt_active_high).set(false);
@@ -1106,8 +1162,7 @@ void setupRotate(int dir)
 void setupPress()
 {
     if (fields[set_selected].kind == Kind::Action) {
-        settings.dial_khz = (uint32_t)atol(dial_text);
-        powerDown("Switched off");
+            powerDown("Switched off");
         return;
     }
     editing = !editing;
@@ -1206,6 +1261,7 @@ void drawHome()
     if (last_slow == 0 || millis() - last_slow > 3000) {
         last_slow = millis();
         card = instance.io.digitalRead(EXPANDS_SD_DET) == LOW;  // the card pulls the detect line low
+        instance.gauge.refresh();  // the readings are only fetched from the chip on request
         battery = (int)instance.gauge.getStateOfCharge();
     }
 
@@ -1249,6 +1305,9 @@ void openMode(Mode m)
         input[0] = '\0';
         follow = true;
         selected = -1;
+        list_view = ListView::All;
+        view_by_hand = false;
+        contact_active = false;
     }
     tile_selected = (int)m;
     if (engine::isSlotMode(m)) {
@@ -1333,6 +1392,134 @@ void openLog()
     lv_screen_load(scr_log);
 }
 
+// --- band and frequency for the logbook ---------------------------------------------------
+
+// The radio is tuned by hand; here the user tells which frequency it is on.
+constexpr int kBandRows = 9;
+constexpr int kMaxBandEntries = 16;
+lv_obj_t *scr_band, *band_title, *band_bg[kBandRows], *band_row[kBandRows], *band_footer;
+uint32_t band_hz[kMaxBandEntries];
+const ft8::BandPreset *band_preset[kMaxBandEntries];
+int band_entries = 0;   // presets for the mode in use; one more row follows for another frequency
+int band_selected = 0;
+char band_other[10] = "";  // kHz as typed, for example "14074" or "7047.5"
+
+bool bandForFt4()
+{
+    return engine::mode() == Mode::FT4;
+}
+
+void buildBand()
+{
+    scr_band = makeScreen();
+    band_title = makeLabel(scr_band, 4, 2, kWidth - 8, &lv_font_montserrat_14, kColCq);
+    for (int i = 0; i < kBandRows; ++i) {
+        int y = 22 + i * 20;
+        band_bg[i] = makeBox(scr_band, 0, y, kWidth, 20, kColBg);
+        band_row[i] = makeLabel(scr_band, 8, y + 2, kWidth - 16, &lv_font_montserrat_14, kColText);
+    }
+    band_footer = makeLabel(scr_band, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
+}
+
+void drawBand()
+{
+    uint32_t current = settings.dialHz(bandForFt4());
+    lv_label_set_text_fmt(band_title, "Frequency of the radio, for the logbook  -  %s%s", engine::modeName(engine::mode()),
+                          settings.cb_mode ? " CB" : "");
+    int rows = band_entries + 1;
+    int top = constrain(band_selected - kBandRows / 2, 0, max(0, rows - kBandRows));
+    for (int i = 0; i < kBandRows; ++i) {
+        int idx = top + i;
+        if (idx >= rows) {
+            lv_label_set_text(band_row[i], "");
+            lv_obj_set_style_bg_color(band_bg[i], kColBg, 0);
+            continue;
+        }
+        if (idx < band_entries) {
+            char mhz[12];
+            ft8::formatMhz(band_hz[idx], mhz);
+            const char *remark = band_preset[idx]->remark;
+            lv_label_set_text_fmt(band_row[i], "%-6s  %s MHz%s%s%s%s", band_preset[idx]->band, mhz, remark[0] ? "  (" : "", remark,
+                                  remark[0] ? ")" : "", band_hz[idx] == current ? "    - in use" : "");
+        } else {
+            lv_label_set_text_fmt(band_row[i], "Other:  %s%s kHz   (type the dial frequency)", band_other, idx == band_selected ? "_" : "");
+        }
+        lv_obj_set_style_bg_color(band_bg[i], idx == band_selected ? kColSel : kColBg, 0);
+    }
+    lv_label_set_text(band_footer, band_selected == band_entries
+                                       ? "digits: hold Space + key   point for half kHz   press: take it   Backspace: delete / leave"
+                                       : "wheel: select   press: take it   Backspace: leave");
+}
+
+void openBand()
+{
+    bool ft4 = bandForFt4();
+    uint32_t current = settings.dialHz(ft4);
+    band_entries = 0;
+    band_selected = -1;
+    for (int i = 0; i < ft8::bandPresetCount(settings.cb_mode) && band_entries < kMaxBandEntries; ++i) {
+        const ft8::BandPreset &p = ft8::bandPreset(settings.cb_mode, i);
+        uint32_t hz = ft4 ? p.ft4_hz : p.ft8_hz;
+        if (hz == 0) {
+            continue;
+        }
+        if (hz == current) {
+            band_selected = band_entries;
+        }
+        band_hz[band_entries] = hz;
+        band_preset[band_entries++] = &p;
+    }
+    // A frequency that is none of the usual ones is shown in the row for typing
+    band_other[0] = '\0';
+    if (band_selected < 0) {
+        band_selected = band_entries;
+        if (current % 1000 == 0) {
+            snprintf(band_other, sizeof(band_other), "%u", (unsigned)(current / 1000));
+        } else {
+            snprintf(band_other, sizeof(band_other), "%u.%u", (unsigned)(current / 1000), (unsigned)(current / 100 % 10));
+        }
+    }
+    screen = Screen::Band;
+    drawBand();
+    lv_screen_load(scr_band);
+}
+
+void closeBand(bool take)
+{
+    if (take) {
+        uint32_t hz = band_selected < band_entries ? band_hz[band_selected] : (uint32_t)(atof(band_other) * 1000 + 0.5);
+        if (hz < 100000 || hz > 450000000u) {
+            showNotice("Not a frequency in kHz - nothing changed");
+        } else {
+            settings.dialHz(bandForFt4()) = hz;
+            settings.save();
+        }
+    }
+    openMode(engine::mode());
+}
+
+void bandKey(char c)
+{
+    size_t n = strlen(band_other);
+    bool typing = band_selected == band_entries;
+    if (c == '\n' || c == '\r') {
+        closeBand(true);
+        return;
+    }
+    if (c == 0x08) {
+        if (typing && n > 0) {
+            band_other[n - 1] = '\0';
+        } else {
+            closeBand(false);
+            return;
+        }
+    } else if (typing && n + 1 < sizeof(band_other) && (isdigit((unsigned char)c) || ((c == '.' || c == ',') && strchr(band_other, '.') == nullptr))) {
+        band_other[n] = c == ',' ? '.' : c;
+        band_other[n + 1] = '\0';
+    }
+    drawBand();
+}
+
 // --- input and housekeeping ------------------------------------------------------------
 
 void updateGridFromGps()
@@ -1386,6 +1573,10 @@ void pollInput()
             drawLog();
             break;
         case Screen::Setup: setupRotate(dir); break;
+        case Screen::Band:
+            band_selected = constrain(band_selected + dir, 0, band_entries);
+            drawBand();
+            break;
         }
     }
     if (pressed) {
@@ -1405,6 +1596,7 @@ void pollInput()
             break;
         case Screen::Log: break;
         case Screen::Setup: setupPress(); break;
+        case Screen::Band: closeBand(true); break;
         }
     }
 
@@ -1430,6 +1622,7 @@ void pollInput()
             }
             break;
         case Screen::Setup: setupKey(c); break;
+        case Screen::Band: bandKey(c); break;
         }
     }
 }
@@ -1493,6 +1686,7 @@ void begin()
     buildText();
     buildFax();
     buildSetup();
+    buildBand();
     buildHome();
     buildLog();
     logbook::load();

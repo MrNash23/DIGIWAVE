@@ -289,4 +289,15 @@ bool Qso::nextTx(int parity, char *text, Packing *packing)
     return true;
 }
 
+bool belongsToQso(const Decoded &msg, bool own, const char *my_call, const char *dx_call)
+{
+    if (own) {
+        return true;
+    }
+    if (my_call[0] != '\0' && strcmp(msg.call_to, my_call) == 0) {
+        return true;
+    }
+    return dx_call[0] != '\0' && (strcmp(msg.call_de, dx_call) == 0 || strcmp(msg.call_to, dx_call) == 0);
+}
+
 }  // namespace ft8

@@ -10,9 +10,9 @@ namespace ft8 {
 extern const char kAdifHeader[];
 
 /// Formats one QSO as an ADIF record (one line, terminated by <eor> and newline).
-/// @param dial_khz dial frequency in kHz, 0 to omit band and frequency
+/// @param dial_hz dial frequency in Hz, 0 to omit band and frequency
 /// @return number of characters written (excluding the terminator)
-size_t formatAdif(const QsoRecord &rec, const QsoConfig &cfg, uint32_t dial_khz, char *out, size_t out_size,
+size_t formatAdif(const QsoRecord &rec, const QsoConfig &cfg, uint32_t dial_hz, char *out, size_t out_size,
                   Protocol protocol = Protocol::FT8);
 
 /// Reads one field of an ADIF record ("<name:len>value", name compared without case).

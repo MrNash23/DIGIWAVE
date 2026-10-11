@@ -86,6 +86,8 @@ void pollSerialCommands()
                                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(), (unsigned)ESP.getFreePsram(),
                                   (unsigned)ESP.getMinFreePsram(), (unsigned long)(millis() / 1000));
                     Serial.printf("[gps] locator \"%s\", from %s\n", settings.grid, settings.grid_auto ? "GPS" : "manual entry");
+                    Serial.printf("[log] dial frequency FT8 %u Hz, FT4 %u Hz, CB FT8 %u Hz, CB FT4 %u Hz\n", (unsigned)settings.dial_ft8_hz,
+                                  (unsigned)settings.dial_ft4_hz, (unsigned)settings.dial_cb_ft8_hz, (unsigned)settings.dial_cb_ft4_hz);
                 } else if (line[0] == 'r') {
                     engine::capture((size_t)constrain(atoi(line + 2), 1, 10) * 12000);
                     recording = true;

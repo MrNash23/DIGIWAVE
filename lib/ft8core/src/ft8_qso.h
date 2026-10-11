@@ -97,4 +97,9 @@ bool parseReport(const char *s, int *report, bool *has_r);
 /// Formats a report as "-07" / "+12", clamped to the range FT8 can carry.
 void formatReport(int snr, char *out);
 
+/// Whether a message belongs into the window that shows the own contact:
+/// what we sent ourselves, what is addressed to us, and what the station we
+/// are working sends or is sent. dx_call may be empty.
+bool belongsToQso(const Decoded &msg, bool own, const char *my_call, const char *dx_call);
+
 }  // namespace ft8

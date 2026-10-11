@@ -29,6 +29,11 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
   beantworten; das Logbuch liegt als ADIF auf der SD-Karte (`/digiwave.adi`)
 - CB-Betrieb (11 m) für FT8/FT4 nach den Regeln von WSJT-CB: CB-Rufzeichen wie
   `26AT016`, eigene Nachrichtenfolge, Länderliste nach Divisionsnummer
+- Eigene Sendungen stehen in der Liste; beim Rufen oder im QSO zeigt die Liste
+  nur das eigene QSO (Taste V wechselt zwischen QSO und allen Empfangenen)
+- Band und Frequenz fürs Logbuch: Da das Funkgerät von Hand abgestimmt wird,
+  öffnet Taste B in FT8/FT4 die Liste der üblichen Frequenzen je Band oder
+  nimmt eine eingetippte; FT8, FT4 und CB-Betrieb merken sich je ihre eigene
 - Zeit aus GPS mit Sekundenimpuls, ohne Empfang aus der Echtzeituhr
 - Locator automatisch aus der GPS-Position oder von Hand
 - WLAN-Zugangspunkt mit einer Seite fürs Handy: Dekodierungen, wichtigste

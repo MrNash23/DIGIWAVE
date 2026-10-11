@@ -16,7 +16,11 @@ void Settings::load()
     }
     p.getString("call", call, sizeof(call));
     p.getString("grid", grid, sizeof(grid));
-    dial_khz = p.getUInt("dial", dial_khz);
+    // Earlier versions kept one frequency in kHz
+    dial_ft8_hz = p.getUInt("dialf8", p.isKey("dial") ? p.getUInt("dial", 14074) * 1000 : dial_ft8_hz);
+    dial_ft4_hz = p.getUInt("dialf4", dial_ft4_hz);
+    dial_cb_ft8_hz = p.getUInt("dialc8", dial_cb_ft8_hz);
+    dial_cb_ft4_hz = p.getUInt("dialc4", dial_cb_ft4_hz);
     tx_hz = p.getInt("txhz", tx_hz);
     tx_level = p.getInt("txlvl", tx_level);
     volume = p.getInt("vol", volume);
@@ -51,7 +55,11 @@ void Settings::save() const
     }
     p.putString("call", call);
     p.putString("grid", grid);
-    p.putUInt("dial", dial_khz);
+    p.putUInt("dialf8", dial_ft8_hz);
+    p.putUInt("dialf4", dial_ft4_hz);
+    p.putUInt("dialc8", dial_cb_ft8_hz);
+    p.putUInt("dialc4", dial_cb_ft4_hz);
+    p.remove("dial");
     p.putInt("txhz", tx_hz);
     p.putInt("txlvl", tx_level);
     p.putInt("vol", volume);

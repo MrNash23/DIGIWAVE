@@ -81,12 +81,21 @@ struct Entry {
     uint32_t slot_utc;    // start of the slot it was heard in, seconds since 1970
     int parity;           // of that slot, 0 or 1
     bool to_me;
+    bool own;             // sent by ourselves
     char grid[5];         // locator of the sending station, from this or an earlier message
     const char *country;  // of the sending station, empty if unknown
 };
 
 /// Copies the decode history, oldest first. Returns the number of entries.
+/// Our own transmissions are part of it.
 int history(Entry *out, int max);
+
+constexpr int kQsoHistory = 24;
+
+/// The same for the own contact only: what we sent, what was addressed to us
+/// and what the station we work sent or was sent. It stays readable when the
+/// band is busy and the full history moves on quickly.
+int qsoHistory(Entry *out, int max);
 
 void setTxEnabled(bool on);
 void startCq();

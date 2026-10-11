@@ -79,7 +79,7 @@ bool append(const ft8::QsoRecord &rec, ft8::Protocol protocol)
     strncpy(cfg.my_call, settings.call, sizeof(cfg.my_call) - 1);
     strncpy(cfg.my_grid, settings.grid, sizeof(cfg.my_grid) - 1);
     char line[400];
-    ft8::formatAdif(rec, cfg, settings.dial_khz, line, sizeof(line), protocol);
+    ft8::formatAdif(rec, cfg, settings.dialHz(protocol == ft8::Protocol::FT4), line, sizeof(line), protocol);
     Serial.printf("[log] %s", line);
     addRow(line);
 

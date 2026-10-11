@@ -49,7 +49,7 @@ h2{font-size:14px;color:#8a8f99;margin:18px 0 6px;font-weight:600}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 td{padding:7px 4px;border-bottom:1px solid #22252b;white-space:nowrap}
 td.m{white-space:normal;width:100%}
-tr.cq td.m{color:#00f5f8}tr.me td.m{color:#ff1ed7}
+tr.cq td.m{color:#00f5f8}tr.me td.m{color:#ff1ed7}tr.own td{color:#ffd23c;background:#2a2408}
 td.n{text-align:right;color:#8a8f99}
 label{display:block;margin:8px 0 2px;color:#8a8f99;font-size:13px}
 input[type=text],input[type=number]{font:inherit;width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid #3a3e47;background:#16181c;color:inherit}
@@ -89,7 +89,7 @@ a{color:#00f5f8}
 <div class="row"><div><label>Callsign</label><input type="text" id="call" maxlength="13" autocapitalize="characters"></div>
 <div><label>Locator</label><input type="text" id="grid" maxlength="4" autocapitalize="characters"></div></div>
 <label><input type="checkbox" id="gridauto"> Locator from GPS</label>
-<div class="row"><div><label>Dial frequency (kHz)</label><input type="number" id="dial" min="0" max="450000"></div>
+<div class="row"><div><label>Dial frequency (kHz)</label><input type="number" id="dial" min="0" max="450000" step="0.1"></div>
 <div><label>TX audio (Hz)</label><input type="number" id="txhz" min="300" max="2800" step="50"></div></div>
 <div class="btns"><button type="submit">Save</button></div>
 </form>
@@ -140,10 +140,10 @@ function render(){
     $('dial').value=S.dial;$('txhz').value=S.txhz}
   const tb=$('list');tb.textContent='';
   for(const h of S.hist.slice().reverse()){
-    const tr=document.createElement('tr');tr.className=h.me?'me':(h.cq?'cq':'');
-    for(const [c,v] of [['',h.t],['n',(h.snr>=0?'+':'')+h.snr],['n',h.f],['m',h.m],['n',(h.g+(h.c?' ('+h.c+')':'')).trim()]]){
+    const tr=document.createElement('tr');tr.className=h.own?'own':(h.me?'me':(h.cq?'cq':''));
+    for(const [c,v] of [['',h.t],['n',h.own?'TX':(h.snr>=0?'+':'')+h.snr],['n',h.f],['m',h.m],['n',(h.g+(h.c?' ('+h.c+')':'')).trim()]]){
       const td=document.createElement('td');td.className=c;td.textContent=v;tr.appendChild(td)}
-    if(h.de)tr.onclick=()=>answer(h);
+    if(h.de&&!h.own)tr.onclick=()=>answer(h);
     tb.appendChild(tr)}
 }
 async function poll(){try{S=await (await fetch('/api/state')).json();render()}catch(e){}}
@@ -218,15 +218,17 @@ void handleState()
     appendJsonString(out, settings.call);
     out += ",\"grid\":";
     appendJsonString(out, settings.grid);
-    snprintf(buf, sizeof(buf), ",\"gridauto\":%s,\"dial\":%u,\"txhz\":%d,\"qsos\":%d,\"hist\":[",
-             settings.grid_auto ? "true" : "false", (unsigned)settings.dial_khz, settings.tx_hz, logbook::total());
+    // The frequency of the mode in use, in kHz
+    snprintf(buf, sizeof(buf), ",\"gridauto\":%s,\"dial\":%.1f,\"txhz\":%d,\"qsos\":%d,\"hist\":[",
+             settings.grid_auto ? "true" : "false", settings.dialHz(engine::mode() == engine::Mode::FT4) / 1000.0, settings.tx_hz,
+             logbook::total());
     out += buf;
     for (int i = 0; i < n; ++i) {
         const engine::Entry &e = hist[i];
         uint32_t t = e.slot_utc;
-        snprintf(buf, sizeof(buf), "%s{\"t\":\"%02u%02u%02u\",\"slot\":%u,\"snr\":%d,\"f\":%d,\"cq\":%s,\"me\":%s,\"de\":",
+        snprintf(buf, sizeof(buf), "%s{\"t\":\"%02u%02u%02u\",\"slot\":%u,\"snr\":%d,\"f\":%d,\"cq\":%s,\"me\":%s,\"own\":%s,\"de\":",
                  i ? "," : "", (unsigned)(t / 3600 % 24), (unsigned)(t / 60 % 60), (unsigned)(t % 60), (unsigned)t, e.msg.snr,
-                 (int)e.msg.freq, e.msg.is_cq ? "true" : "false", e.to_me ? "true" : "false");
+                 (int)e.msg.freq, e.msg.is_cq ? "true" : "false", e.to_me ? "true" : "false", e.own ? "true" : "false");
         out += buf;
         appendJsonString(out, e.msg.call_de);
         out += ",\"g\":";
@@ -338,7 +340,7 @@ void handleSettings()
         strncpy(settings.grid, grid.c_str(), sizeof(settings.grid) - 1);
     }
     settings.grid_auto = grid_auto;
-    settings.dial_khz = (uint32_t)constrain(server.arg("dial").toInt(), 0L, 450000L);
+    settings.dialHz(engine::mode() == engine::Mode::FT4) = (uint32_t)(constrain(server.arg("dial").toDouble(), 0.0, 450000.0) * 1000 + 0.5);
     settings.tx_hz = constrain((int)server.arg("txhz").toInt(), 300, 2800);
     settings.save();
     engine::applySettings();
@@ -432,6 +434,9 @@ void handleLog()
 
 void start()
 {
+    // The driver must not keep its settings in flash: the settings area is
+    // shared with the other firmwares on the pager and may be full
+    WiFi.persistent(false);
     WiFi.mode(WIFI_AP);
     // WPA2 needs at least 8 characters; a shorter password would open the network
     const char *pass = strlen(settings.wifi_pass) >= 8 ? settings.wifi_pass : "digiwave";

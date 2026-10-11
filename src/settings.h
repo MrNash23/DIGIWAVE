@@ -7,7 +7,15 @@ struct Settings {
     char grid[8] = "";
     bool grid_auto = true;      // take the locator from the GPS position
     bool cb_mode = false;       // FT8/FT4 with CB callsigns and the WSJT-CB message sequence
-    uint32_t dial_khz = 14074;  // for the log; the radio is tuned by hand
+    // Dial frequency in Hz for the log; the radio is tuned by hand, so the user
+    // tells which one it is. Kept per mode, and separately for CB operation.
+    uint32_t dial_ft8_hz = 14074000;
+    uint32_t dial_ft4_hz = 14080000;
+    uint32_t dial_cb_ft8_hz = 27265000;
+    uint32_t dial_cb_ft4_hz = 27265000;
+
+    /// The frequency that applies to FT8 or FT4 in the current kind of operation.
+    uint32_t &dialHz(bool ft4) { return cb_mode ? (ft4 ? dial_cb_ft4_hz : dial_cb_ft8_hz) : (ft4 ? dial_ft4_hz : dial_ft8_hz); }
     int tx_hz = 1500;           // audio frequency of the lowest tone
     int tx_level = 50;          // percent of full scale
     int volume = 80;            // codec output volume, percent

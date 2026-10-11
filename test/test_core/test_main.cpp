@@ -9,6 +9,7 @@
 
 #include <cb_mode.h>
 #include <cw_codec.h>
+#include <band_plan.h>
 #include <ft8_adif.h>
 #include <ft8_country.h>
 #include <ft8_decoder.h>
@@ -428,9 +429,16 @@ static void test_adif()
     rec.time_off = 1791627345;
     rec.audio_freq = 1500;
     char line[400];
-    formatAdif(rec, cfg, 14080, line, sizeof(line), Protocol::FT4);
+    formatAdif(rec, cfg, 14080000, line, sizeof(line), Protocol::FT4);
     TEST_ASSERT_NOT_NULL(strstr(line, "<mode:4>MFSK <submode:3>FT4 "));
-    size_t n = formatAdif(rec, cfg, 14074, line, sizeof(line));
+    // FT4 on 40 m sits on half a kilohertz
+    formatAdif(rec, cfg, 7047500, line, sizeof(line), Protocol::FT4);
+    TEST_ASSERT_NOT_NULL(strstr(line, "<band:3>40m <freq:8>7.049000 "));
+    formatAdif(rec, cfg, 27265000, line, sizeof(line));
+    TEST_ASSERT_NOT_NULL(strstr(line, "<band:3>11m <freq:9>27.266500 "));
+    formatAdif(rec, cfg, 0, line, sizeof(line));
+    TEST_ASSERT_NULL(strstr(line, "<freq"));
+    size_t n = formatAdif(rec, cfg, 14074000, line, sizeof(line));
     TEST_ASSERT_EQUAL(strlen(line), n);
     TEST_ASSERT_EQUAL_STRING(
         "<call:5>K1XYZ <gridsquare:4>FN42 <mode:3>FT8 <rst_sent:3>-12 <rst_rcvd:3>+03 "
@@ -458,6 +466,64 @@ static void test_grid_from_position()
     TEST_ASSERT_TRUE(gridFromLatLon(90.0, 180.0, g));
     TEST_ASSERT_EQUAL_STRING("RR99", g);
     TEST_ASSERT_FALSE(gridFromLatLon(91.0, 0.0, g));
+}
+
+static Decoded parsed(const char *text)
+{
+    Decoded d{};
+    strncpy(d.text, text, sizeof(d.text) - 1);
+    parseMessage(d);
+    return d;
+}
+
+static void test_qso_window()
+{
+    // What we send ourselves is read like a received message
+    Decoded cq = parsed("CQ DL1ABC JO62");
+    TEST_ASSERT_TRUE(cq.is_cq);
+    TEST_ASSERT_EQUAL_STRING("DL1ABC", cq.call_de);
+    Decoded report = parsed("K1XYZ DL1ABC -05");
+    TEST_ASSERT_EQUAL_STRING("K1XYZ", report.call_to);
+    TEST_ASSERT_EQUAL_STRING("-05", report.extra);
+
+    TEST_ASSERT_TRUE(belongsToQso(cq, true, "DL1ABC", ""));
+    TEST_ASSERT_TRUE(belongsToQso(parsed("DL1ABC K1XYZ FN42"), false, "DL1ABC", ""));        // to us
+    TEST_ASSERT_TRUE(belongsToQso(parsed("PA3XYZ K1XYZ RR73"), false, "DL1ABC", "K1XYZ"));  // from the partner
+    TEST_ASSERT_TRUE(belongsToQso(parsed("K1XYZ G4ABC JO01"), false, "DL1ABC", "K1XYZ"));   // to the partner
+    TEST_ASSERT_FALSE(belongsToQso(parsed("CQ G4ABC JO01"), false, "DL1ABC", "K1XYZ"));
+    TEST_ASSERT_FALSE(belongsToQso(parsed("CQ G4ABC JO01"), false, "DL1ABC", ""));
+    // No callsign set: nothing counts as addressed to us
+    TEST_ASSERT_FALSE(belongsToQso(parsed("CQ G4ABC JO01"), false, "", ""));
+}
+
+static void test_band_plan()
+{
+    TEST_ASSERT_EQUAL(12, bandPresetCount(false));
+    TEST_ASSERT_EQUAL(1, bandPresetCount(true));
+    TEST_ASSERT_EQUAL_UINT32(27265000, bandPreset(true, 0).ft8_hz);
+    // Every preset lies in the band it is named after, and FT4 has no place on 160 m and 60 m
+    int without_ft4 = 0;
+    for (int i = 0; i < bandPresetCount(false); ++i) {
+        const BandPreset &p = bandPreset(false, i);
+        const char *name = bandName(p.ft8_hz / 1000);
+        TEST_ASSERT_NOT_NULL(name);
+        char spaced[8];
+        snprintf(spaced, sizeof(spaced), "%.*s m", (int)strlen(name) - 1, name);
+        TEST_ASSERT_EQUAL_STRING(p.band, spaced);
+        if (p.ft4_hz == 0) {
+            ++without_ft4;
+        } else {
+            TEST_ASSERT_EQUAL_STRING(name, bandName(p.ft4_hz / 1000));
+        }
+    }
+    TEST_ASSERT_EQUAL(2, without_ft4);
+    char text[12];
+    formatMhz(14074000, text);
+    TEST_ASSERT_EQUAL_STRING("14.074", text);
+    formatMhz(7047500, text);
+    TEST_ASSERT_EQUAL_STRING("7.0475", text);
+    formatMhz(144174000, text);
+    TEST_ASSERT_EQUAL_STRING("144.174", text);
 }
 
 static void test_adif_field()
@@ -1283,6 +1349,8 @@ int main()
     RUN_TEST(test_qso_gives_up);
     RUN_TEST(test_qso_halt);
     RUN_TEST(test_adif);
+    RUN_TEST(test_band_plan);
+    RUN_TEST(test_qso_window);
     RUN_TEST(test_adif_field);
     RUN_TEST(test_grid_from_position);
     RUN_TEST(test_country);

@@ -105,7 +105,7 @@ const char *bandName(uint32_t khz)
     return nullptr;
 }
 
-size_t formatAdif(const QsoRecord &rec, const QsoConfig &cfg, uint32_t dial_khz, char *out, size_t out_size, Protocol protocol)
+size_t formatAdif(const QsoRecord &rec, const QsoConfig &cfg, uint32_t dial_hz, char *out, size_t out_size, Protocol protocol)
 {
     char date_on[9], time_on[7], date_off[9], time_off[7], sent[4], rcvd[4];
     time_t t_on = rec.time_on;
@@ -137,13 +137,13 @@ size_t formatAdif(const QsoRecord &rec, const QsoConfig &cfg, uint32_t dial_khz,
     pos = field(out, out_size, pos, "time_on", time_on);
     pos = field(out, out_size, pos, "qso_date_off", date_off);
     pos = field(out, out_size, pos, "time_off", time_off);
-    if (dial_khz != 0) {
-        const char *band = bandName(dial_khz);
+    if (dial_hz != 0) {
+        const char *band = bandName(dial_hz / 1000);
         if (band != nullptr) {
             pos = field(out, out_size, pos, "band", band);
         }
         char freq[16];
-        snprintf(freq, sizeof(freq), "%.6f", (dial_khz * 1000.0 + rec.audio_freq) / 1e6);
+        snprintf(freq, sizeof(freq), "%.6f", (dial_hz + (double)rec.audio_freq) / 1e6);
         pos = field(out, out_size, pos, "freq", freq);
     }
     pos = field(out, out_size, pos, "station_callsign", cfg.my_call);

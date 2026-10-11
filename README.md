@@ -45,6 +45,12 @@ and keys the radio. No computer is involved.
   sequence runs by itself and the contact is written to an ADIF logbook on the SD card
 - **CB (11 m) operation** for FT8 and FT4: CB callsigns such as `26AT016`, the
   message sequence of WSJT-CB and the country list by division number
+- **The own contact at a glance**: what is sent appears in the list with what
+  is heard, and while calling or working a station the list shows just that
+  contact (key V switches between it and everything heard)
+- **Band and frequency for the logbook**: the radio is tuned by hand, so key B
+  in FT8 and FT4 opens the list of the usual frequencies per band (or takes a
+  typed one). FT8, FT4 and CB operation each remember their own
 - **Exact time from GPS** with the pulse-per-second signal; the real-time clock
   takes over without reception
 - **Locator from GPS**, or entered by hand
