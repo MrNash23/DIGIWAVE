@@ -6,8 +6,7 @@
 #include <stdint.h>
 
 /// Audio path between the FT8 engine and a radio: 12 kHz, mono, 16 bit.
-/// The built-in codec is the first backend; a line-in/line-out interface
-/// becomes another implementation of this class.
+/// Backends: the built-in codec, and the interface board with line in and line out.
 class AudioIo {
 public:
     virtual ~AudioIo() = default;
@@ -32,3 +31,13 @@ public:
 
 /// Built-in ES8311 codec with microphone and speaker.
 AudioIo &es8311Audio();
+
+/// Whether the interface board on the 12-pin port answers on the I2C bus.
+bool interfaceBoardPresent();
+
+/// Line in and line out of the interface board: its own ES8311 at 0x19 on
+/// I2S1, one data pin shared by both directions and switched with the PTT.
+AudioIo &interfaceAudio();
+
+/// Which backend was chosen at the start.
+extern bool audio_on_board;

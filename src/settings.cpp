@@ -37,6 +37,7 @@ void Settings::load()
     max_retries = p.getInt("retry", max_retries);
     max_cq = p.getInt("maxcq", max_cq);
     ptt_active_high = p.getBool("ptthi", ptt_active_high);
+    audio_board = p.getBool("audioif", audio_board);
     grid_auto = p.getBool("gridauto", grid_auto);
     cb_mode = p.getBool("cbmode", cb_mode);
     wifi_on = p.getBool("wifi", wifi_on);
@@ -82,6 +83,7 @@ void Settings::save() const
     p.putInt("retry", max_retries);
     p.putInt("maxcq", max_cq);
     p.putBool("ptthi", ptt_active_high);
+    p.putBool("audioif", audio_board);
     p.putBool("gridauto", grid_auto);
     p.putBool("cbmode", cb_mode);
     p.putBool("wifi", wifi_on);

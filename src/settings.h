@@ -42,6 +42,7 @@ struct Settings {
     int max_retries = 5;
     int max_cq = 20;
     bool ptt_active_high = true;
+    bool audio_board = true;    // line in and out of the interface board when it is plugged in
     bool wifi_on = false;       // access point with the web interface
     char wifi_pass[20] = "digiwave";
 

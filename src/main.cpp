@@ -33,10 +33,22 @@ void setup()
     timebase::begin();
     Serial.printf("[dw] clock source %s\n", timebase::sourceName());
 
-    AudioIo &audio = es8311Audio();
-    if (!audio.begin()) {
+    // The interface board is used when it is plugged in and chosen in the setup;
+    // otherwise, or if its codec does not start, the built-in one.
+    bool board = settings.audio_board && interfaceBoardPresent();
+    if (board && !interfaceAudio().begin()) {
+        Serial.println("[dw] interface board codec did not start");
+        board = false;
+    }
+    AudioIo &audio = board ? interfaceAudio() : es8311Audio();
+    if (!board && !audio.begin()) {
         Serial.println("[dw] audio codec did not start");
     }
+    if (board) {
+        instance.io.digitalWrite(EXPANDS_AMP_EN, LOW);  // the speaker stays silent
+    }
+    audio_on_board = board;
+    Serial.printf("[dw] audio %s\n", board ? "interface board" : "built-in");
     Ptt &ptt = extensionPortPtt(settings.ptt_active_high);
     ptt.begin();
 

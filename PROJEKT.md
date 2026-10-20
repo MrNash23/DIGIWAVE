@@ -80,12 +80,13 @@ Meshtastic) und wird über den Launcher von bmorcelli gestartet.
 - FT8-Empfang ist am Gerät mit echten Signalen geprüft; ein Zeitschlitz wird in
   etwa 0,7 s dekodiert.
 - NAVTEX und SSTV sind bisher nur mit erzeugten Signalen getestet; WEFAX hat echte Wetterkarten empfangen.
-- Senden ist in keiner Betriebsart auf dem Band getestet.
-- Audio läuft vorerst über Mikrofon und Lautsprecher des Pagers.
+- Senden: FT8-CQ über die Zusatzplatine auf dem Band gesendet (PTT und Pegel geprüft), noch ohne Antwort einer Gegenstation.
+- Audio läuft über die Zusatzplatine am 12-poligen Anschluss (Line-In, Line-Out,
+  PTT), wenn sie steckt; sonst über Mikrofon und Lautsprecher des Pagers. Die
+  Auswahl steht im Setup unter „Audio“.
 
 ## Geplant
 
-- Zusatzplatine für den 12-Pin-Anschluss mit Line-In, Line-Out und PTT
 - CW-Tastleitung, Logbuch auch für CW- und RTTY-Verbindungen
 
 ## Lizenz

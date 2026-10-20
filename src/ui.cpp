@@ -11,6 +11,7 @@
 
 #include "assets/assets.h"
 #include "engine.h"
+#include "hal/audio_if.h"
 #include "logbook.h"
 #include "settings.h"
 #include "timebase.h"
@@ -1443,6 +1444,8 @@ void pollPower(const engine::Status &st, bool received)
 // --- setup screen ------------------------------------------------------------------------
 
 enum class Kind { Text, Number, Toggle, Action };
+
+bool audio_board_at_start = false;  // the setting the audio path was chosen with
 enum class Chars { Call, Digits, Any };
 
 struct Field {
@@ -1473,6 +1476,7 @@ Field fields[] = {
     {"Volume", Kind::Number, nullptr, 0, Chars::Call, &settings.volume, 0, 100, 5, " %", nullptr, "", ""},
     {"Input gain", Kind::Number, nullptr, 0, Chars::Call, &settings.mic_gain_db, 0, 42, 3, " dB", nullptr, "", ""},
     {"Clock offset", Kind::Number, nullptr, 0, Chars::Call, &settings.time_offset_ds, -75, 75, 1, " x0.1 s", nullptr, "", ""},
+    {"Audio (restarts)", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.audio_board, "interface board", "built-in"},
     {"PTT output", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.ptt_active_high, "active high", "active low"},
     {"Wi-Fi access point", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.wifi_on, "on", "off"},
     {"Wi-Fi password", Kind::Text, settings.wifi_pass, sizeof(settings.wifi_pass), Chars::Any, nullptr, 0, 0, 0, "", nullptr, "", ""},
@@ -1524,7 +1528,11 @@ void drawSetup()
             lv_label_set_text_fmt(set_value[i], "%d%s", *f.number, f.unit);
             break;
         case Kind::Toggle:
-            lv_label_set_text(set_value[i], *f.toggle ? f.on : f.off);
+            if (f.toggle == &settings.audio_board && settings.audio_board && !audio_on_board && audio_board_at_start) {
+                lv_label_set_text(set_value[i], "interface board - not found");
+            } else {
+                lv_label_set_text(set_value[i], *f.toggle ? f.on : f.off);
+            }
             break;
         case Kind::Action:
             lv_label_set_text(set_value[i], "press the wheel");
@@ -1612,6 +1620,21 @@ void openSetup()
 void closeSetup()
 {
     settings.save();
+    if (settings.audio_board != audio_board_at_start) {
+        // The audio path is chosen at the start
+        lv_obj_t *scr = makeScreen();
+        lv_obj_t *label = makeLabel(scr, 0, 100, kWidth, &lv_font_montserrat_14, kColText);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_text(label, "Restarting with the new audio path");
+        lv_screen_load(scr);
+        lv_timer_handler();
+        engine::stop();
+        saveFaxIfUnsaved();
+        saveSstvIfUnsaved();
+        web::shutdown();
+        delay(800);
+        esp_restart();
+    }
     engine::applySettings();
     extensionPortPtt(settings.ptt_active_high).set(false);
     web::apply();
@@ -2791,6 +2814,7 @@ void splash()
 
 void begin()
 {
+    audio_board_at_start = settings.audio_board;
     // The library registers LVGL input devices for encoder and keyboard; they would
     // consume the events this module reads itself.
     for (lv_indev_t *indev = lv_indev_get_next(nullptr); indev != nullptr; indev = lv_indev_get_next(indev)) {
