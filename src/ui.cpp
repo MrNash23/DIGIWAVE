@@ -1473,7 +1473,7 @@ Field fields[] = {
     {"RTTY speed", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.rtty_50_baud, "50 baud", "45.45 baud"},
     {"RTTY shift", Kind::Number, nullptr, 0, Chars::Call, &settings.rtty_shift, 85, 850, 5, " Hz", nullptr, "", ""},
     {"TX level", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_level, 5, 100, 5, " %", nullptr, "", ""},
-    {"Volume", Kind::Number, nullptr, 0, Chars::Call, &settings.volume, 0, 100, 5, " %", nullptr, "", ""},
+    {"Volume", Kind::Number, nullptr, 0, Chars::Call, &settings.volume, 0, 100, 1, " %", nullptr, "", ""},
     {"Input gain", Kind::Number, nullptr, 0, Chars::Call, &settings.mic_gain_db, 0, 42, 3, " dB", nullptr, "", ""},
     {"Clock offset", Kind::Number, nullptr, 0, Chars::Call, &settings.time_offset_ds, -75, 75, 1, " x0.1 s", nullptr, "", ""},
     {"Audio (restarts)", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.audio_board, "interface board", "built-in"},
