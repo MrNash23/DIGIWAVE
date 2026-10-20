@@ -483,8 +483,9 @@ void drawSlot()
         lv_label_set_text(slot_footer, notice);
         lv_obj_set_style_text_color(slot_footer, kColWarn, 0);
     } else {
+        // T shows the state of the transmitter; V tells which list a press brings up
         lv_label_set_text_fmt(slot_footer, "Enter: call  T: TX %s  C: CQ  H: halt  V: %s  B: band  |  %d dec",
-                              st.tx_enabled ? "ON" : "off", list_view == ListView::Qso ? "QSO" : "all", st.decoded);
+                              st.tx_enabled ? "ON" : "off", list_view == ListView::Qso ? "show all" : "show QSO", st.decoded);
         lv_obj_set_style_text_color(slot_footer, st.tx_enabled ? kColTx : kColDim, 0);
     }
 
@@ -778,11 +779,11 @@ void textRotate(int dir)
     switch (engine::mode()) {
     case Mode::CW:
         // The wheel moves the receive window, which is also the tone we send on
-        settings.cw_tone = constrain(settings.cw_tone + dir * 10, 400, 1200);
+        settings.cw_tone = constrain(settings.cw_tone - dir * 10, 400, 1200);
         engine::applySettings();
         break;
     default:
-        engine::tune(dir * 5);
+        engine::tune(-dir * 5);
         break;
     }
 }
@@ -1443,7 +1444,7 @@ void pollPower(const engine::Status &st, bool received)
 
 // --- setup screen ------------------------------------------------------------------------
 
-enum class Kind { Text, Number, Toggle, Action };
+enum class Kind { Text, Number, Toggle, Action, Header };  // Header: a section title, not selectable
 
 bool audio_board_at_start = false;  // the setting the audio path was chosen with
 enum class Chars { Call, Digits, Any };
@@ -1462,22 +1463,28 @@ struct Field {
 };
 
 Field fields[] = {
+    {"STATION", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Callsign", Kind::Text, settings.call, sizeof(settings.call), Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
-    {"FT8/FT4 operation", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.cb_mode, "CB (11 m)", "amateur radio"},
     {"Locator from", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.grid_auto, "GPS", "manual entry"},
     {"Locator", Kind::Text, settings.grid, 5, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
+    {"FT8/FT4 operation", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.cb_mode, "CB (11 m)", "amateur radio"},
+    {"AUDIO AND RADIO", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
+    {"Audio (restarts)", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.audio_board, "interface board", "built-in"},
+    {"Input gain", Kind::Number, nullptr, 0, Chars::Call, &settings.mic_gain_db, 0, 42, 3, " dB", nullptr, "", ""},
+    {"Volume", Kind::Number, nullptr, 0, Chars::Call, &settings.volume, 0, 100, 1, " %", nullptr, "", ""},
+    {"TX level", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_level, 5, 100, 5, " %", nullptr, "", ""},
+    {"PTT output", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.ptt_active_high, "active high", "active low"},
+    {"FT8 / FT4", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"FT8/FT4 TX frequency", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_hz, 300, 2800, 50, " Hz", nullptr, "", ""},
     {"FT8/FT4 max repeats", Kind::Number, nullptr, 0, Chars::Call, &settings.max_retries, 1, 20, 1, "", nullptr, "", ""},
+    {"CW", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"CW sending speed", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_wpm, 5, 40, 1, " WPM", nullptr, "", ""},
     {"CW tone (RX window, TX)", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_tone, 400, 1200, 10, " Hz", nullptr, "", ""},
+    {"RTTY", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"RTTY speed", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.rtty_50_baud, "50 baud", "45.45 baud"},
     {"RTTY shift", Kind::Number, nullptr, 0, Chars::Call, &settings.rtty_shift, 85, 850, 5, " Hz", nullptr, "", ""},
-    {"TX level", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_level, 5, 100, 5, " %", nullptr, "", ""},
-    {"Volume", Kind::Number, nullptr, 0, Chars::Call, &settings.volume, 0, 100, 1, " %", nullptr, "", ""},
-    {"Input gain", Kind::Number, nullptr, 0, Chars::Call, &settings.mic_gain_db, 0, 42, 3, " dB", nullptr, "", ""},
+    {"DEVICE", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Clock offset", Kind::Number, nullptr, 0, Chars::Call, &settings.time_offset_ds, -75, 75, 1, " x0.1 s", nullptr, "", ""},
-    {"Audio (restarts)", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.audio_board, "interface board", "built-in"},
-    {"PTT output", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.ptt_active_high, "active high", "active low"},
     {"Wi-Fi access point", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.wifi_on, "on", "off"},
     {"Wi-Fi password", Kind::Text, settings.wifi_pass, sizeof(settings.wifi_pass), Chars::Any, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Sleep when idle after", Kind::Number, nullptr, 0, Chars::Call, &settings.sleep_min, 0, 30, 1, " min (0 = never)", nullptr, "", ""},
@@ -1512,6 +1519,10 @@ void drawSetup()
     if (set_selected < set_top) {
         set_top = set_selected;
     }
+    // The title of the section stays in view above its first entry
+    if (set_selected > 0 && fields[set_selected - 1].kind == Kind::Header && set_selected - 1 < set_top) {
+        set_top = set_selected - 1;
+    }
     if (set_selected >= set_top + kSetRows) {
         set_top = set_selected - kSetRows + 1;
     }
@@ -1520,7 +1531,11 @@ void drawSetup()
         const Field &f = fields[idx];
         bool active = idx == set_selected;
         lv_label_set_text(set_name[i], f.name);
+        lv_obj_set_style_text_color(set_name[i], f.kind == Kind::Header ? kColCq : kColText, 0);
         switch (f.kind) {
+        case Kind::Header:
+            lv_label_set_text(set_value[i], "");
+            break;
         case Kind::Text:
             lv_label_set_text_fmt(set_value[i], "%s%s%s", f.text, (active && editing) ? "_" : "", f.unit);
             break;
@@ -1540,7 +1555,16 @@ void drawSetup()
         }
         lv_obj_set_style_bg_color(set_bg[i], active ? (editing ? kColEdit : kColSel) : kColBg, 0);
     }
-    lv_label_set_text_fmt(set_footer, "%d of %d", set_selected + 1, kFields);
+    int number = 0, total = 0;
+    for (int i = 0; i < kFields; ++i) {
+        if (fields[i].kind != Kind::Header) {
+            ++total;
+            if (i <= set_selected) {
+                ++number;
+            }
+        }
+    }
+    lv_label_set_text_fmt(set_footer, "%d of %d", number, total);
 }
 
 // --- licence and credits ---------------------------------------------------------------
@@ -1609,7 +1633,7 @@ void aboutRotate(int dir)
 void openSetup()
 {
     sub_from_app = inApp();
-    set_selected = 0;
+    set_selected = 1;  // the first entry below the first section title
     set_top = 0;
     editing = false;
     screen = Screen::Setup;
@@ -1645,9 +1669,17 @@ void setupRotate(int dir)
 {
     Field &f = fields[set_selected];
     if (!editing) {
-        set_selected = constrain(set_selected + dir, 0, kFields - 1);
+        // Section titles are passed over
+        int next = set_selected + dir;
+        while (next >= 0 && next < kFields && fields[next].kind == Kind::Header) {
+            next += dir;
+        }
+        if (next >= 0 && next < kFields) {
+            set_selected = next;
+        }
     } else if (f.kind == Kind::Number) {
-        *f.number = constrain(*f.number + dir * f.step, f.min, f.max);
+        // Turning up, which moves a list up, raises the number
+        *f.number = constrain(*f.number - dir * f.step, f.min, f.max);
     } else if (f.kind == Kind::Toggle) {
         *f.toggle = !*f.toggle;
     }
@@ -2550,7 +2582,7 @@ void overlayRotate(int dir)
 {
     Act &a = acts[act_selected];
     if (act_editing && a.value != nullptr) {
-        *a.value = constrain(*a.value + dir * a.step, a.min, a.max);
+        *a.value = constrain(*a.value - dir * a.step, a.min, a.max);  // up raises it, as in the setup
         engine::applySettings();
     } else {
         act_selected = constrain(act_selected + dir, 0, act_count - 1);
