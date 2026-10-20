@@ -6,17 +6,21 @@
 
 namespace {
 
+constexpr uint8_t kPttPin = 9;  // XL9555 P11, pin 10 of the 12-pin port
+
 class ExtensionPortPtt : public Ptt {
 public:
     bool active_high = true;
 
     void begin() override
     {
-        instance.io.pinMode(EXPANDS_GPIO_EN, OUTPUT);
+        // The output register starts at 1; the level is set before the pin becomes an output
+        set(false);
+        instance.io.pinMode(kPttPin, OUTPUT);
         set(false);
     }
 
-    void set(bool transmit) override { instance.io.digitalWrite(EXPANDS_GPIO_EN, transmit == active_high ? HIGH : LOW); }
+    void set(bool transmit) override { instance.io.digitalWrite(kPttPin, transmit == active_high ? HIGH : LOW); }
 };
 
 ExtensionPortPtt ptt;

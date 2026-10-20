@@ -20,6 +20,11 @@ void setup()
     // The LoRa radio, NFC and motion sensor are not used by this firmware.
     // NO_INIT_FATFS: the library otherwise waits forever for a FAT partition in flash.
     uint32_t probe = instance.begin(NO_HW_LORA | NO_HW_NFC | NO_HW_SENSOR | NO_INIT_FATFS);
+    // The PTT line is driven low before anything else; the library leaves it alone
+    // (see the variant's pins_arduino.h), so it has been low since power-on.
+    settings.load();
+    Ptt &ptt = extensionPortPtt(settings.ptt_active_high);
+    ptt.begin();
     Serial.printf("[dw] board up, devices 0x%06x\n", (unsigned)probe);
     // The library switches everything on; the NFC chip and the LoRa radio only
     // draw current here. The speaker amplifier is switched by the audio driver.
@@ -29,7 +34,6 @@ void setup()
     instance.setBrightness(DEVICE_MAX_BRIGHTNESS_LEVEL);
     ui::splash();
 
-    settings.load();
     timebase::begin();
     Serial.printf("[dw] clock source %s\n", timebase::sourceName());
 
@@ -49,9 +53,6 @@ void setup()
     }
     audio_on_board = board;
     Serial.printf("[dw] audio %s\n", board ? "interface board" : "built-in");
-    Ptt &ptt = extensionPortPtt(settings.ptt_active_high);
-    ptt.begin();
-
     engine::begin(audio, ptt);
     ui::begin();
     Serial.println("[dw] running");

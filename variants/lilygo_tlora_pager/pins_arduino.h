@@ -79,7 +79,10 @@ static const uint8_t SCK = 35;
 #define EXPANDS_NFC_EN    (5)
 #define EXPANDS_GPS_RST   (7)
 #define EXPANDS_KB_EN     (8)
-#define EXPANDS_GPIO_EN   (9)
+// P11 (index 9) goes to pin 10 of the 12-pin port. Not defined here, so that the
+// library leaves it alone: it would switch it on at start, and on the interface
+// board that line keys the radio. DIGIWAVE drives it as the PTT (hal/ptt_xl9555.cpp).
+// #define EXPANDS_GPIO_EN   (9)
 #define EXPANDS_SD_DET    (10)
 #define EXPANDS_SD_PULLEN (11)
 #define EXPANDS_SD_EN     (12)
