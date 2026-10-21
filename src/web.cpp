@@ -12,6 +12,7 @@
 #include "assets/assets.h"
 #include "engine.h"
 #include "logbook.h"
+#include "schedule.h"
 #include "settings.h"
 #include "timebase.h"
 #include "ui.h"
@@ -89,6 +90,14 @@ a{color:#00f5f8}
 <div id="faxlist" class="dim">none yet</div>
 <canvas id="faxcv" class="hide" style="width:100%;margin-top:8px;image-rendering:pixelated"></canvas>
 </section>
+<section id="psched">
+<h2><span id="schedname">WEFAX</span> schedule <span id="schedsrc" class="dim"></span></h2>
+<p class="dim">One chart per line: start in UTC, then what it is, for example <code>22:00 Surface analysis</code>.
+Lines with # are notes; <code>Station:</code> and <code>Frequencies:</code> name the sender.</p>
+<textarea id="sched" rows="12" spellcheck="false" style="width:100%;box-sizing:border-box;font:13px/1.4 ui-monospace,monospace;background:#16181c;color:inherit;border:1px solid #3a3e47;border-radius:8px;padding:8px"></textarea>
+<div class="btns"><button onclick="saveSched()">Save schedule</button><button onclick="loadSched()">Reload</button>
+<button onclick="if(confirm('Use the built-in DWD plan again?'))post('/api/schedule',{p:schedPlan,reset:1}).then(loadSched)">Built-in plan</button></div>
+</section>
 <h2>Station</h2>
 <form onsubmit="save(event)">
 <div class="row"><div><label>Callsign</label><input type="text" id="call" maxlength="13" autocapitalize="characters"></div>
@@ -137,6 +146,11 @@ async function showFax(n){
   }else for(let i=0;i<w*h;i++){const v=b[off+i];im.data[4*i]=im.data[4*i+1]=im.data[4*i+2]=v;im.data[4*i+3]=255}
   g.putImageData(im,0,0);c.className='';c.scrollIntoView()
 }
+let schedPlan='';
+async function loadSched(){try{const r=await fetch('/api/schedule?p='+schedPlan);$('sched').value=await r.text();
+  $('schedname').textContent=schedPlan.toUpperCase();
+  $('schedsrc').textContent=r.headers.get('X-Source')=='card'?'(from the SD card)':'(built in)'}catch(e){}}
+function saveSched(){post('/api/schedule',{p:schedPlan,text:$('sched').value}).then(loadSched)}
 function save(e){e.preventDefault();post('/api/settings',{call:$('call').value,grid:$('grid').value,
   gridauto:$('gridauto').checked?1:0,dial:$('dial').value,txhz:$('txhz').value})}
 function answer(h){if(confirm('Call '+h.de+'?'))post('/api/answer',{slot:h.slot,f:h.f})}
@@ -150,6 +164,10 @@ function render(){
   $('sendform').className=S.cansend?'':'hide';
   if(text)$('text').textContent=S.text;
   if(fax&&Date.now()-faxAt>10000){faxAt=Date.now();loadFax()}
+  // The WEFAX charts and the RTTY programme each have their plan
+  const plan=S.mode==5?'wefax':(S.mode==3?'rtty':'');
+  $('psched').className=plan?'':'hide';
+  if(plan&&plan!=schedPlan){schedPlan=plan;loadSched()}
   $('utc').textContent=S.utc;$('src').textContent=S.src;
   $('me').textContent=(S.call||'no callsign')+' '+(S.grid||'');
   const st=$('state');st.className=S.tx?'tx':'';
@@ -462,6 +480,33 @@ void handleFaxDelete()
     server.send(200, "text/plain", ok ? "Deleted" : "No such picture");
 }
 
+void handleScheduleGet()
+{
+    schedule::Plan p;
+    if (!schedule::fromId(server.arg("p").c_str(), &p)) {
+        server.send(404, "text/plain", "No such plan");
+        return;
+    }
+    server.sendHeader("X-Source", schedule::fromCard(p) ? "card" : "builtin");
+    server.send(200, "text/plain; charset=utf-8", schedule::text(p));
+}
+
+void handleSchedulePost()
+{
+    schedule::Plan p;
+    if (!schedule::fromId(server.arg("p").c_str(), &p)) {
+        server.send(404, "text/plain", "No such plan");
+        return;
+    }
+    if (server.hasArg("reset")) {
+        server.send(200, "text/plain", schedule::restoreDefault(p));
+        return;
+    }
+    bool ok = false;
+    const char *msg = schedule::save(p, server.arg("text"), &ok);
+    server.send(ok ? 200 : 400, "text/plain", msg);
+}
+
 void handleLog()
 {
     // The card shares the SPI bus with the display, which is drawn from this same thread
@@ -487,9 +532,7 @@ void start()
     // shared with the other firmwares on the pager and may be full
     WiFi.persistent(false);
     WiFi.mode(WIFI_AP);
-    // WPA2 needs at least 8 characters; a shorter password would open the network
-    const char *pass = strlen(settings.wifi_pass) >= 8 ? settings.wifi_pass : "digiwave";
-    if (!WiFi.softAP(kSsid, pass)) {
+    if (!WiFi.softAP(kSsid, password())) {
         Serial.println("[web] access point did not start");
         WiFi.mode(WIFI_OFF);
         return;
@@ -505,6 +548,8 @@ void start()
     server.on("/api/answer", HTTP_POST, handleAnswer);
     server.on("/api/settings", HTTP_POST, handleSettings);
     server.on("/log.adi", HTTP_GET, handleLog);
+    server.on("/api/schedule", HTTP_GET, handleScheduleGet);
+    server.on("/api/schedule", HTTP_POST, handleSchedulePost);
     server.on("/api/mode", HTTP_POST, handleMode);
     server.on("/api/send", HTTP_POST, handleSend);
     server.on("/api/fax", HTTP_GET, handleFaxList);
@@ -566,6 +611,12 @@ void shutdown()
 const char *address()
 {
     return addr;
+}
+
+const char *password()
+{
+    // WPA2 needs at least 8 characters; a shorter password would open the network
+    return strlen(settings.wifi_pass) >= 8 ? settings.wifi_pass : "digiwave";
 }
 
 }  // namespace web

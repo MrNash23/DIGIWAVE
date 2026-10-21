@@ -25,4 +25,7 @@ void shutdown();
 /// Address to open in the browser, or an empty string while Wi-Fi is off.
 const char *address();
 
+/// Password of the access point.
+const char *password();
+
 }  // namespace web

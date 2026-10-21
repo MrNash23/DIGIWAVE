@@ -16,6 +16,7 @@
 #include "settings.h"
 #include "timebase.h"
 #include "web.h"
+#include "schedule.h"
 
 // Input is read directly from the rotary encoder and the keyboard instead of
 // through LVGL input devices: the screens have a fixed layout and a handful
@@ -47,7 +48,7 @@ const lv_color_t kColWarn = lv_color_hex(0xE0A020);
 const lv_color_t kColAccent = lv_color_hex(0x3766FF);
 const lv_color_t kColFrame = lv_color_hex(0x202D7A);
 
-enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, About, Band, FaxList, FaxView };
+enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, About, Band, FaxList, FaxView, Schedule };
 Screen screen = Screen::Home;
 
 void openHome();
@@ -62,6 +63,7 @@ void openOverlay();
 void drawNoticeBar();
 void clearText();
 void backFromSub();
+void openSchedule();
 bool inApp();
 void modeWithFrequency(Mode m, char *out, size_t size);
 void powerDown(const char *reason);
@@ -1088,6 +1090,7 @@ void faxKey(char c)
     case 'n': clearFaxPicture(); break;
     case 'b': openBand(); break;
     case 'p': openFaxList(); break;
+    case 't': openSchedule(); break;
     case 0x08:
         openHome();
         break;
@@ -1902,7 +1905,9 @@ void homePress()
 
 constexpr int kLogRows = 9;
 lv_obj_t *scr_log;
-lv_obj_t *log_title, *log_row[kLogRows];
+lv_obj_t *log_title, *log_row[kLogRows], *log_hint;
+lv_obj_t *log_qr_box, *log_qr, *log_qr_text;
+int log_qr_page = 0;  // 0: hidden, 1: joining the Wi-Fi, 2: downloading the file
 int log_top = 0;
 
 void buildLog()
@@ -1912,8 +1917,104 @@ void buildLog()
     for (int i = 0; i < kLogRows; ++i) {
         log_row[i] = makeLabel(scr_log, 8, 22 + i * 20, kWidth - 16, &lv_font_montserrat_14, kColText);
     }
-    lv_obj_t *hint = makeLabel(scr_log, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
-    lv_label_set_text_fmt(hint, "wheel: scroll  press: figures / list  Backspace: back  file: %s", logbook::kPath + 1);
+    log_hint = makeLabel(scr_log, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
+
+    // A phone reads the codes: the first joins the access point, the second fetches the file
+    log_qr_box = makeBox(scr_log, 0, 0, kWidth, kFooterY, kColBg);
+    log_qr = lv_qrcode_create(log_qr_box);
+    lv_qrcode_set_size(log_qr, 176);
+    lv_qrcode_set_dark_color(log_qr, lv_color_hex(0x000000));
+    lv_qrcode_set_light_color(log_qr, lv_color_hex(0xFFFFFF));
+    lv_obj_set_style_border_color(log_qr, lv_color_hex(0xFFFFFF), 0);  // the quiet zone around the code
+    lv_obj_set_style_border_width(log_qr, 6, 0);
+    lv_obj_set_pos(log_qr, 12, 8);
+    log_qr_text = makeLabel(log_qr_box, 214, 12, kWidth - 222, &lv_font_montserrat_14, kColText);
+    lv_label_set_long_mode(log_qr_text, LV_LABEL_LONG_WRAP);
+    lv_obj_add_flag(log_qr_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+/// Text for a Wi-Fi QR code; the characters with a meaning in it are escaped.
+void appendQrEscaped(char *out, size_t size, const char *text)
+{
+    size_t n = strlen(out);
+    for (; *text && n + 2 < size; ++text) {
+        if (strchr("\\;,:\"", *text)) {
+            out[n++] = '\\';
+        }
+        out[n++] = *text;
+    }
+    out[n] = '\0';
+}
+
+void drawLogQr()
+{
+    if (log_qr_page == 0) {
+        lv_obj_add_flag(log_qr_box, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    char data[96];
+    if (log_qr_page == 1) {
+        snprintf(data, sizeof(data), "WIFI:T:WPA;S:");
+        appendQrEscaped(data, sizeof(data), web::kSsid);
+        strncat(data, ";P:", sizeof(data) - strlen(data) - 1);
+        appendQrEscaped(data, sizeof(data), web::password());
+        strncat(data, ";;", sizeof(data) - strlen(data) - 1);
+        lv_label_set_text_fmt(log_qr_text, "1  Join the Wi-Fi\n\nScan with the phone camera.\n\nNetwork: %s\nPassword: %s\n\nQ: next code", web::kSsid,
+                              web::password());
+    } else {
+        snprintf(data, sizeof(data), "%s/log.adi", web::address());
+        lv_label_set_text_fmt(log_qr_text, "2  Download the logbook\n\nScan once the phone is in the Wi-Fi.\n\n%s\n\nQ or Backspace: close", data);
+    }
+    lv_qrcode_update(log_qr, data, strlen(data));
+    lv_obj_remove_flag(log_qr_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+void drawLog();
+
+/// Switches the access point on or off from the logbook, as in the setup.
+void setLogWifi(bool on)
+{
+    settings.wifi_on = on;
+    settings.save();
+    web::apply();
+    if (on && !web::running()) {
+        showNotice("Wi-Fi did not start");
+    }
+}
+
+void logKey(char c)
+{
+    if (c == 0x08) {
+        if (log_qr_page != 0) {
+            log_qr_page = 0;
+            drawLogQr();
+        } else {
+            backFromSub();
+        }
+        return;
+    }
+    switch (c) {
+    case 'w':
+    case 'W':
+        log_qr_page = 0;
+        drawLogQr();
+        setLogWifi(!web::running());
+        break;
+    case 'q':
+    case 'Q':
+        if (log_qr_page == 0 && !web::running()) {
+            setLogWifi(true);  // the codes are of no use without the access point
+        }
+        if (!web::running()) {
+            return;
+        }
+        log_qr_page = (log_qr_page + 1) % 3;
+        drawLogQr();
+        break;
+    default:
+        return;
+    }
+    drawLog();
 }
 
 bool log_stats = false;  // the page with the figures instead of the list
@@ -1957,8 +2058,20 @@ void drawLogStats()
     }
 }
 
+void drawLogHint()
+{
+    if (web::running()) {
+        lv_label_set_text_fmt(log_hint, "Q: QR code  W: Wi-Fi off  Backspace: back  |  download: %s/log.adi", web::address() + 7);
+        lv_obj_set_style_text_color(log_hint, kColCq, 0);
+    } else {
+        lv_label_set_text(log_hint, "wheel: scroll  press: figures  W: Wi-Fi download  Q: QR code  Backspace: back");
+        lv_obj_set_style_text_color(log_hint, kColDim, 0);
+    }
+}
+
 void drawLog()
 {
+    drawLogHint();
     if (log_stats) {
         drawLogStats();
         return;
@@ -1992,9 +2105,133 @@ void openLog()
     sub_from_app = inApp();
     log_stats = false;
     log_top = 0;
+    log_qr_page = 0;
+    drawLogQr();
     screen = Screen::Log;
     drawLog();
     lv_screen_load(scr_log);
+}
+
+// --- broadcast schedule ---------------------------------------------------------------------
+
+// The broadcasts of the weather station of the mode in use, by their time, with
+// the next one marked. The plans are built in or come from the SD card, where
+// the phone page saves them.
+constexpr int kSchedRows = 9;
+lv_obj_t *scr_sched, *sched_title, *sched_bg[kSchedRows], *sched_row[kSchedRows], *sched_footer;
+schedule::Plan sched_plan = schedule::Plan::Wefax;
+int sched_top = 0;
+bool sched_follow = true;  // the list keeps the next broadcast in view until the wheel is turned
+
+int utcMinuteOfDay()
+{
+    return (int)((timebase::utcMs() / 60000) % 1440);
+}
+
+/// The plan for a mode; false for modes without one.
+bool planFor(Mode m, schedule::Plan *p)
+{
+    if (m == Mode::WEFAX) {
+        *p = schedule::Plan::Wefax;
+        return true;
+    }
+    if (m == Mode::RTTY) {
+        *p = schedule::Plan::Rtty;
+        return true;
+    }
+    return false;
+}
+
+void buildSchedule()
+{
+    scr_sched = makeScreen();
+    sched_title = makeLabel(scr_sched, 4, 2, kWidth - 8, &lv_font_montserrat_14, kColCq);
+    for (int i = 0; i < kSchedRows; ++i) {
+        int y = 22 + i * 20;
+        sched_bg[i] = makeBox(scr_sched, 0, y, kWidth, 20, kColBg);
+        sched_row[i] = makeLabel(scr_sched, 8, y + 2, kWidth - 16, &lv_font_montserrat_14, kColText);
+    }
+    sched_footer = makeLabel(scr_sched, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
+}
+
+/// "in 7 min" or "in 2 h 05".
+void formatWait(int minutes, char *out, size_t size)
+{
+    if (minutes < 60) {
+        snprintf(out, size, "in %d min", minutes);
+    } else {
+        snprintf(out, size, "in %d h %02d", minutes / 60, minutes % 60);
+    }
+}
+
+/// The next broadcast for the menu, for example "21:00 in 55 min".
+void nextBroadcastText(schedule::Plan p, char *out, size_t size)
+{
+    int now = utcMinuteOfDay();
+    int nx = schedule::next(p, now);
+    if (nx < 0) {
+        snprintf(out, size, "no plan");
+        return;
+    }
+    const schedule::Entry &e = schedule::entry(p, nx);
+    char wait[16];
+    formatWait((e.minute - now + 1440) % 1440, wait, sizeof(wait));
+    snprintf(out, size, "%02d:%02d %s", e.minute / 60, e.minute % 60, wait);
+}
+
+void drawSchedule()
+{
+    const schedule::Plan p = sched_plan;
+    int now = utcMinuteOfDay();
+    int n = schedule::count(p);
+    int nx = schedule::next(p, now);
+    lv_label_set_text_fmt(sched_title, "%s  %s  %s", p == schedule::Plan::Wefax ? "WEFAX" : "RTTY", schedule::station(p), schedule::frequencies(p));
+    if (sched_follow) {
+        sched_top = nx - 1;  // the broadcast before stays in view, it may still be running
+    }
+    sched_top = constrain(sched_top, 0, max(0, n - kSchedRows));
+    // The one before the next started last; it runs until the next begins, at most for a while
+    int last = nx > 0 ? nx - 1 : n - 1;
+    bool on_air = n > 0 && (now - schedule::entry(p, last).minute + 1440) % 1440 < schedule::longestMinutes(p);
+    for (int i = 0; i < kSchedRows; ++i) {
+        int idx = sched_top + i;
+        if (idx >= n) {
+            lv_label_set_text(sched_row[i], "");
+            lv_obj_set_style_bg_color(sched_bg[i], kColBg, 0);
+            continue;
+        }
+        const schedule::Entry &e = schedule::entry(p, idx);
+        // Broadcasts earlier today are over; after the last one of the day all come tomorrow
+        bool past = e.minute <= now && !(nx == 0 && e.minute > now);
+        char when[16] = "";
+        lv_color_t color = kColText;
+        if (idx == last && on_air) {
+            snprintf(when, sizeof(when), "on air");
+            color = kColCq;
+        } else if (past) {
+            color = kColDim;
+        } else {
+            formatWait((e.minute - now + 1440) % 1440, when, sizeof(when));
+        }
+        lv_label_set_text_fmt(sched_row[i], "%02d:%02d   %-12s %s", e.minute / 60, e.minute % 60, when, e.text);
+        lv_obj_set_style_text_color(sched_row[i], idx == nx ? kColText : color, 0);
+        lv_obj_set_style_bg_color(sched_bg[i], idx == nx ? kColSel : kColBg, 0);
+    }
+    lv_label_set_text_fmt(sched_footer, "now %02d:%02d UTC   wheel: scroll  Backspace: back   |  %s", now / 60, now % 60,
+                          schedule::fromCard(p) ? "plan from the SD card" : "built-in plan, change it on the Wi-Fi page");
+}
+
+void openSchedule()
+{
+    if (!planFor(engine::mode(), &sched_plan)) {
+        return;
+    }
+    sub_from_app = inApp();
+    schedule::load(sched_plan);  // a plan saved on the phone page in the meantime
+    sched_follow = true;
+    screen = Screen::Schedule;
+    drawSchedule();
+    lv_screen_load(scr_sched);
 }
 
 // --- frequency of the radio ---------------------------------------------------------------
@@ -2485,6 +2722,11 @@ void fillActs()
         }
         addAct("", clearText, false, "Clear the received text");
         addAct("", toggleOptionAct, true, "Tones: %s", st.option ? "reversed" : "normal");
+        {
+            char next[24];
+            nextBroadcastText(schedule::Plan::Rtty, next, sizeof(next));
+            addAct("", openSchedule, false, "DWD schedule: next %s", next);  // letters are text to send here
+        }
         break;
     case Mode::NAVTEX:
         addAct("C", clearText, false, "Clear the received text");
@@ -2497,6 +2739,11 @@ void fillActs()
         addAct("C", clearFaxPicture, false, "Clear, start a new picture");
         addAct("", alignFax, false, "Align the picture again");
         addAct("P", openFaxList, false, "Saved pictures");
+        {
+            char next[24];
+            nextBroadcastText(schedule::Plan::Wefax, next, sizeof(next));
+            addAct("T", openSchedule, false, "Schedule: next %s", next);
+        }
         break;
     case Mode::SSTV:
         addAct("Enter", saveSstvNow, false, "Save now (%d lines)", sstv_have);
@@ -2719,6 +2966,11 @@ void pollInput()
             drawFaxList();
             break;
         case Screen::FaxView: faxViewScroll(dir); break;
+        case Screen::Schedule:
+            sched_follow = false;
+            sched_top += dir;
+            drawSchedule();
+            break;
         }
     }
     if (pressed) {
@@ -2738,6 +2990,10 @@ void pollInput()
         case Screen::About: break;
         case Screen::Band: closeBand(true); break;
         case Screen::FaxList: openFaxView(); break;
+        case Screen::Schedule:
+            sched_follow = true;  // back to the next chart
+            drawSchedule();
+            break;
         }
     }
 
@@ -2758,11 +3014,7 @@ void pollInput()
         case Screen::Text: textKey(c); break;
         case Screen::Fax: faxKey(c); break;
         case Screen::Sstv: sstvKey(c); break;
-        case Screen::Log:
-            if (c == 0x08) {
-                backFromSub();
-            }
-            break;
+        case Screen::Log: logKey(c); break;
         case Screen::Setup: setupKey(c); break;
         case Screen::About:
             if (c == 0x08) {
@@ -2783,6 +3035,11 @@ void pollInput()
         case Screen::FaxView:
             if (c == 0x08) {
                 openFaxList();
+            }
+            break;
+        case Screen::Schedule:
+            if (c == 0x08) {
+                backFromSub();
             }
             break;
         }
@@ -2847,6 +3104,8 @@ void splash()
 void begin()
 {
     audio_board_at_start = settings.audio_board;
+    schedule::load(schedule::Plan::Wefax);
+    schedule::load(schedule::Plan::Rtty);
     // The library registers LVGL input devices for encoder and keyboard; they would
     // consume the events this module reads itself.
     for (lv_indev_t *indev = lv_indev_get_next(nullptr); indev != nullptr; indev = lv_indev_get_next(indev)) {
@@ -2864,6 +3123,7 @@ void begin()
     buildOverlay();
     buildHome();
     buildLog();
+    buildSchedule();
     logbook::load();
     web::apply();
     tile_selected = (int)engine::mode();
@@ -2932,6 +3192,7 @@ void loop()
         case Screen::Text: drawText(); break;
         case Screen::Fax: drawFax(); break;
         case Screen::Sstv: drawSstv(); break;
+        case Screen::Schedule: drawSchedule(); break;
         default: break;
         }
         drawNoticeBar();
