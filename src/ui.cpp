@@ -50,7 +50,7 @@ const lv_color_t kColWarn = lv_color_hex(0xE0A020);
 const lv_color_t kColAccent = lv_color_hex(0x3766FF);
 const lv_color_t kColFrame = lv_color_hex(0x202D7A);
 
-enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, About, Band, FaxList, FaxView, Schedule };
+enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, About, Band, FaxList, FaxView, Schedule, HomeWifi };
 Screen screen = Screen::Home;
 
 void openHome();
@@ -60,6 +60,7 @@ void openSetup();
 bool sub_from_app = false;  // a page opened from a mode returns to it, not to the menu
 void openBand();
 void openAbout();
+void openHomeWifi();
 void openFaxList();
 void openOverlay();
 void drawNoticeBar();
@@ -1707,7 +1708,7 @@ void pollPower(const engine::Status &st, bool received)
 enum class Kind { Text, Number, Toggle, Action, Header };  // Header: a section title, not selectable
 
 bool audio_board_at_start = false;  // the setting the audio path was chosen with
-enum class Chars { Call, Digits, Any, Spaced };  // Spaced: Any and the space, for network names
+enum class Chars { Call, Digits, Any };
 
 struct Field {
     const char *name;
@@ -1749,8 +1750,7 @@ Field fields[] = {
     {"Clock offset", Kind::Number, nullptr, 0, Chars::Call, &settings.time_offset_ds, -75, 75, 1, " x0.1 s", nullptr, "", ""},
     {"Wi-Fi access point", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.wifi_on, "on", "off"},
     {"Wi-Fi password", Kind::Text, settings.wifi_pass, sizeof(settings.wifi_pass), Chars::Any, nullptr, 0, 0, 0, "", nullptr, "", ""},
-    {"Home Wi-Fi network", Kind::Text, settings.home_ssid, sizeof(settings.home_ssid), Chars::Spaced, nullptr, 0, 0, 0, "", nullptr, "", ""},
-    {"Home Wi-Fi password", Kind::Text, settings.home_pass, sizeof(settings.home_pass), Chars::Spaced, nullptr, 0, 0, 0, "", nullptr, "", ""},
+    {"Home Wi-Fi", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Sleep when idle after", Kind::Number, nullptr, 0, Chars::Call, &settings.sleep_min, 0, 30, 1, " min (0 = never)", nullptr, "", ""},
     {"About DIGIWAVE", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Switch off", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
@@ -1814,7 +1814,11 @@ void drawSetup()
             }
             break;
         case Kind::Action:
-            lv_label_set_text(set_value[i], "press the wheel");
+            if (strcmp(f.name, "Home Wi-Fi") == 0) {
+                lv_label_set_text(set_value[i], settings.home_ssid[0] ? settings.home_ssid : "set up with the phone");
+            } else {
+                lv_label_set_text(set_value[i], "press the wheel");
+            }
             break;
         }
         lv_obj_set_style_bg_color(set_bg[i], active ? (editing ? kColEdit : kColSel) : kColBg, 0);
@@ -1957,6 +1961,8 @@ void setupPress()
     if (fields[set_selected].kind == Kind::Action) {
         if (strncmp(fields[set_selected].name, "About", 5) == 0) {
             openAbout();
+        } else if (strcmp(fields[set_selected].name, "Home Wi-Fi") == 0) {
+            openHomeWifi();
         } else {
             powerDown("Switched off");
         }
@@ -1995,9 +2001,6 @@ void setupKey(char c)
             break;
         case Chars::Any:
             ok = isgraph((unsigned char)c);
-            break;
-        case Chars::Spaced:
-            ok = isprint((unsigned char)c);
             break;
         }
         size_t n = strlen(f.text);
@@ -2236,6 +2239,110 @@ void drawLogQr()
     }
     lv_qrcode_update(log_qr, data, strlen(data));
     lv_obj_remove_flag(log_qr_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+// --- home Wi-Fi -------------------------------------------------------------------------
+
+// The home network is set up from the phone, without typing on the pager: the
+// first code joins the access point, the second opens the page that lists the
+// networks in reach, where the password is pasted
+lv_obj_t *scr_homewifi, *hw_qr, *hw_text, *hw_state;
+int hw_page = 0;  // 0: join the access point, 1: open the setup page
+
+void buildHomeWifi()
+{
+    scr_homewifi = makeScreen();
+    hw_qr = lv_qrcode_create(scr_homewifi);
+    lv_qrcode_set_size(hw_qr, 176);
+    lv_qrcode_set_dark_color(hw_qr, lv_color_hex(0x000000));
+    lv_qrcode_set_light_color(hw_qr, lv_color_hex(0xFFFFFF));
+    lv_obj_set_style_border_color(hw_qr, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(hw_qr, 6, 0);
+    lv_obj_set_pos(hw_qr, 12, 8);
+    hw_text = makeLabel(scr_homewifi, 214, 8, kWidth - 222, &lv_font_montserrat_14, kColText);
+    lv_label_set_long_mode(hw_text, LV_LABEL_LONG_WRAP);
+    hw_state = makeLabel(scr_homewifi, 214, 140, kWidth - 222, &lv_font_montserrat_14, kColText);
+    lv_label_set_long_mode(hw_state, LV_LABEL_LONG_WRAP);
+    lv_obj_t *hint = makeLabel(scr_homewifi, 4, kFooterY + 2, kWidth - 8, &lv_font_montserrat_12, kColDim);
+    lv_label_set_text(hint, "Q or press: other code   Backspace: back");
+}
+
+void drawHomeWifiQr()
+{
+    char data[96];
+    if (hw_page == 0) {
+        snprintf(data, sizeof(data), "WIFI:T:WPA;S:");
+        appendQrEscaped(data, sizeof(data), web::kSsid);
+        strncat(data, ";P:", sizeof(data) - strlen(data) - 1);
+        appendQrEscaped(data, sizeof(data), web::password());
+        strncat(data, ";;", sizeof(data) - strlen(data) - 1);
+        lv_label_set_text(hw_text, "HOME WI-FI\n1  Scan with the phone camera\n    to join the pager.\n\nThen Q for the second code.");
+    } else {
+        snprintf(data, sizeof(data), "%s/#home", web::address());
+        lv_label_set_text(hw_text, "HOME WI-FI\n2  Scan to open the setup page.\n    Choose the network there and\n    paste its password.");
+    }
+    lv_qrcode_update(hw_qr, data, strlen(data));
+}
+
+/// The state of the home network, redrawn while the screen is open.
+void drawHomeWifi()
+{
+    const char *st = web::homeState();
+    lv_color_t col = kColText;
+    if (!web::running()) {
+        lv_label_set_text(hw_state, "Wi-Fi is off");
+        col = kColWarn;
+    } else if (st[0] == '\0') {
+        lv_label_set_text(hw_state, "No home network yet");
+    } else if (strcmp(st, "joined") == 0) {
+        lv_label_set_text_fmt(hw_state, "Joined %s\n%s  digiwave.local", settings.home_ssid, web::homeAddress());
+        col = kColCq;
+    } else if (strcmp(st, "joining") == 0) {
+        lv_label_set_text_fmt(hw_state, "Joining %s ...", settings.home_ssid);
+    } else if (strcmp(st, "notfound") == 0) {
+        lv_label_set_text_fmt(hw_state, "%s not in reach", settings.home_ssid);
+        col = kColWarn;
+    } else {
+        lv_label_set_text_fmt(hw_state, "Could not join %s - password wrong?", settings.home_ssid);
+        col = kColWarn;
+    }
+    lv_obj_set_style_text_color(hw_state, col, 0);
+}
+
+void openHomeWifi()
+{
+    // The codes are of no use without the access point
+    if (!web::running()) {
+        settings.wifi_on = true;
+        settings.save();
+        web::apply();
+        if (!web::running()) {
+            showNotice("Wi-Fi did not start");
+            return;
+        }
+    }
+    hw_page = 0;
+    screen = Screen::HomeWifi;
+    drawHomeWifiQr();
+    drawHomeWifi();
+    lv_screen_load(scr_homewifi);
+}
+
+void closeHomeWifi()
+{
+    screen = Screen::Setup;
+    drawSetup();
+    lv_screen_load(scr_setup);
+}
+
+void homeWifiKey(char c)
+{
+    if (c == 0x08) {
+        closeHomeWifi();
+    } else if (c == 'q' || c == 'Q' || c == '\n' || c == '\r') {
+        hw_page = 1 - hw_page;
+        drawHomeWifiQr();
+    }
 }
 
 void drawLog();
@@ -3265,6 +3372,10 @@ void pollInput()
             drawLog();
             break;
         case Screen::Setup: setupPress(); break;
+        case Screen::HomeWifi:
+            hw_page = 1 - hw_page;
+            drawHomeWifiQr();
+            break;
         case Screen::About: break;
         case Screen::Band: closeBand(true); break;
         case Screen::FaxList: openFaxView(); break;
@@ -3294,6 +3405,7 @@ void pollInput()
         case Screen::Sstv: sstvKey(c); break;
         case Screen::Log: logKey(c); break;
         case Screen::Setup: setupKey(c); break;
+        case Screen::HomeWifi: homeWifiKey(c); break;
         case Screen::About:
             if (c == 0x08) {
                 // Back to the setup, on the entry it was opened from
@@ -3403,6 +3515,7 @@ void begin()
     buildSstv();
     buildSetup();
     buildAbout();
+    buildHomeWifi();
     buildBand();
     buildFaxPages();
     buildOverlay();
@@ -3478,6 +3591,7 @@ void loop()
         case Screen::Fax: drawFax(); break;
         case Screen::Sstv: drawSstv(); break;
         case Screen::Schedule: drawSchedule(); break;
+        case Screen::HomeWifi: drawHomeWifi(); break;
         default: break;
         }
         drawNoticeBar();

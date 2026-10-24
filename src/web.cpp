@@ -31,7 +31,8 @@ char addr[32] = "";
 // Home network: joined besides the access point when settings.home_ssid is set
 char home_addr[16] = "";
 uint32_t join_ms = 0;      // last attempt to join
-uint32_t restart_ms = 0;   // when to restart Wi-Fi after a change from the web page, 0 = not pending
+bool rejoin = false;       // the home network was changed on the web page, join it in loop()
+constexpr uint32_t kJoinMs = 20000;  // an attempt that has not joined by then has failed
 // A failed attempt scans all channels and takes a phone on the access point
 // with it, so it is only repeated while no phone is connected
 constexpr uint32_t kRejoinMs = 60000;
@@ -66,7 +67,7 @@ td.m{white-space:normal;width:100%}
 tr.cq td.m{color:#00f5f8}tr.me td.m{color:#ff1ed7}tr.own td{color:#ffd23c;background:#2a2408}tr.w2 td.m{color:#5c5c5c}tr.w1 td.m{color:#7fa0b8}
 td.n{text-align:right;color:#8a8f99}
 label{display:block;margin:8px 0 2px;color:#8a8f99;font-size:13px}
-input[type=text],input[type=number]{font:inherit;width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid #3a3e47;background:#16181c;color:inherit}
+input[type=text],input[type=number],select{font:inherit;width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid #3a3e47;background:#16181c;color:inherit}
 .row{display:flex;gap:10px}.row>div{flex:1}
 a{color:#00f5f8}
 #msg{color:#e0a020;min-height:1.35em;margin-top:6px}
@@ -118,12 +119,16 @@ Lines with # are notes; <code>Station:</code> and <code>Frequencies:</code> name
 </form>
 <h2>Logbook</h2>
 <p><span id="qsos">0</span> QSOs &middot; <a href="/log.adi" download="digiwave.adi">Download ADIF file</a></p>
-<h2>Home network</h2>
-<p>Joined besides the access point, so that CBScope on a computer at home finds the pager as digiwave.local and takes over the logbook. <span id="homeaddr"></span></p>
+<h2 id="home">Home network</h2>
+<p>Joined besides the access point, so that CBScope on a computer at home finds the pager as digiwave.local and takes over the logbook.</p>
+<p><b id="homestate"></b></p>
 <form onsubmit="saveHome(event)">
+<label>Network</label>
+<select id="nets" onchange="if(this.value)$('homessid').value=this.value"><option value="">Searching for networks&hellip;</option></select>
 <div class="row"><div><label>Network name</label><input type="text" id="homessid" maxlength="32"></div>
-<div><label>Password</label><input type="text" id="homepass" maxlength="63" placeholder="unchanged"></div></div>
-<div class="btns"><button type="submit">Save</button></div>
+<div><label>Password</label><input type="text" id="homepass" maxlength="63" placeholder="unchanged" autocapitalize="off" autocorrect="off" spellcheck="false"></div></div>
+<p class="dim">The password can be copied in the Wi-Fi settings of the phone and pasted here.</p>
+<div class="btns"><button type="button" onclick="scan()">Search again</button><button type="submit">Save</button><button type="button" onclick="forgetHome()">Forget</button></div>
 </form>
 </main>
 <script>
@@ -170,6 +175,18 @@ function saveSched(){post('/api/schedule',{p:schedPlan,text:$('sched').value}).t
 function save(e){e.preventDefault();post('/api/settings',{call:$('call').value,grid:$('grid').value,
   gridauto:$('gridauto').checked?1:0,dial:$('dial').value,txhz:$('txhz').value})}
 function saveHome(e){e.preventDefault();post('/api/home',{ssid:$('homessid').value,pass:$('homepass').value});$('homepass').value=''}
+function forgetHome(){$('homessid').value='';$('homepass').value='';post('/api/home',{ssid:'',pass:''})}
+// The pager scans in the background; ask again until the list is there
+async function scan(again){
+  try{const r=await (await fetch('/api/scan'+(again?'':'?new=1'))).json();
+    if(r.scanning){setTimeout(()=>scan(true),1500);return}
+    const s=$('nets');s.textContent='';
+    const o=document.createElement('option');o.value='';o.textContent=r.nets.length?'Choose a network ('+r.nets.length+' found)':'No network found';s.appendChild(o);
+    for(const n of r.nets){const e=document.createElement('option');e.value=n.s;e.textContent=n.s+(n.o?'  (open)':'')+'  '+n.r+' dBm';
+      if(n.s==S.homessid)e.selected=true;s.appendChild(e)}
+  }catch(x){setTimeout(()=>scan(true),3000)}
+}
+scan();
 function answer(h){if(confirm('Call '+h.de+'?'))post('/api/answer',{slot:h.slot,f:h.f})}
 function render(){
   const ms=$('modes');
@@ -192,7 +209,8 @@ function render(){
   document.querySelector('#bar div').style.width=S.slot+'%';
   const b=$('btx');b.textContent=S.txen?'TX ON':'TX off';b.className=S.txen?'on':'';
   $('qsos').textContent=S.qsos;
-  $('homeaddr').textContent=S.home?'Joined, address '+S.home+'.':(S.homessid?'Not joined.':'');
+  $('homestate').textContent={joined:'Joined '+S.homessid+', address '+S.home,joining:'Joining '+S.homessid+'\u2026',
+    notfound:S.homessid+' not found - is it in reach?',failed:'Could not join '+S.homessid+' - password wrong?'}[S.homestate]||'No home network set';
   if(!filled){filled=true;$('call').value=S.call;$('grid').value=S.grid;$('gridauto').checked=S.gridauto;
     $('dial').value=S.dial;$('txhz').value=S.txhz;$('homessid').value=S.homessid}
   const tb=$('list');tb.textContent='';
@@ -289,6 +307,8 @@ void handleState()
     appendJsonString(out, settings.home_ssid);
     out += ",\"home\":";
     appendJsonString(out, home_addr);
+    out += ",\"homestate\":";
+    appendJsonString(out, homeState());
     // The frequency of the mode in use, in kHz
     snprintf(buf, sizeof(buf), ",\"gridauto\":%s,\"dial\":%.1f,\"txhz\":%d,\"qsos\":%d,\"hist\":[",
              settings.grid_auto ? "true" : "false", settings.dialHz((int)engine::mode()) / 1000.0, settings.tx_hz,
@@ -468,12 +488,61 @@ void handleHome()
     strncpy(settings.home_ssid, ssid.c_str(), sizeof(settings.home_ssid) - 1);
     settings.home_ssid[sizeof(settings.home_ssid) - 1] = '\0';
     settings.save();
-    server.send(200, "text/plain", ssid.length() ? "Saved - Wi-Fi restarts, reconnect the phone" : "Home network removed");
-    // Restarting here would cut off the answer
-    restart_ms = millis() + 1000;
-    if (restart_ms == 0) {
-        restart_ms = 1;
+    server.send(200, "text/plain", ssid.length() ? "Saved - joining, the phone may drop out for a moment" : "Home network removed");
+    // Joining here would hold up the answer
+    rejoin = true;
+}
+
+/// Networks in reach, for choosing the home network instead of typing its name.
+/// The scan runs in the background: the first call starts it, later ones fetch the result.
+void handleScan()
+{
+    server.sendHeader("Cache-Control", "no-store");
+    int n = WiFi.scanComplete();
+    if (n != WIFI_SCAN_RUNNING && (n < 0 || server.hasArg("new"))) {
+        // new=1: a result left over from earlier may be old
+        WiFi.scanDelete();
+        WiFi.scanNetworks(true);
+        n = WIFI_SCAN_RUNNING;
     }
+    if (n == WIFI_SCAN_RUNNING) {
+        server.send(200, "application/json", "{\"scanning\":true}");
+        return;
+    }
+    // The strongest first, each name once (a mesh or repeater sends it several times)
+    int order[32];
+    int count = 0;
+    for (int i = 0; i < n && count < 32; ++i) {
+        if (WiFi.SSID(i).length() == 0) {
+            continue;  // hidden network
+        }
+        bool seen = false;
+        for (int j = 0; j < count && !seen; ++j) {
+            seen = WiFi.SSID(order[j]) == WiFi.SSID(i);
+        }
+        if (!seen) {
+            order[count++] = i;
+        }
+    }
+    for (int a = 1; a < count; ++a) {
+        for (int b = a; b > 0 && WiFi.RSSI(order[b]) > WiFi.RSSI(order[b - 1]); --b) {
+            int t = order[b];
+            order[b] = order[b - 1];
+            order[b - 1] = t;
+        }
+    }
+    String out = "{\"nets\":[";
+    for (int k = 0; k < count; ++k) {
+        int i = order[k];
+        out += k ? ",{\"s\":" : "{\"s\":";
+        appendJsonString(out, WiFi.SSID(i).c_str());
+        out += ",\"r\":";
+        out += WiFi.RSSI(i);
+        out += WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? ",\"o\":true}" : ",\"o\":false}";
+    }
+    out += "]}";
+    WiFi.scanDelete();
+    server.send(200, "application/json", out);
 }
 
 void handleMode()
@@ -663,6 +732,7 @@ void start()
     server.on("/log.adi", HTTP_GET, handleLog);
     server.on("/api/log", HTTP_GET, handleLogInfo);
     server.on("/api/home", HTTP_POST, handleHome);
+    server.on("/api/scan", HTTP_GET, handleScan);
     server.on("/api/schedule", HTTP_GET, handleScheduleGet);
     server.on("/api/schedule", HTTP_POST, handleSchedulePost);
     server.on("/api/mode", HTTP_POST, handleMode);
@@ -716,9 +786,18 @@ void loop()
         return;
     }
     server.handleClient();
-    if (restart_ms != 0 && (int32_t)(millis() - restart_ms) >= 0) {
-        restart_ms = 0;
-        apply();
+    if (rejoin) {
+        // The access point stays up; only the connection to the home network changes
+        rejoin = false;
+        home_addr[0] = '\0';
+        WiFi.disconnect();
+        if (settings.home_ssid[0] == '\0') {
+            WiFi.mode(WIFI_AP);
+            return;
+        }
+        WiFi.mode(WIFI_AP_STA);
+        WiFi.setAutoReconnect(false);
+        joinHome();
         return;
     }
     if (settings.home_ssid[0] == '\0') {
@@ -762,6 +841,20 @@ const char *address()
 const char *homeAddress()
 {
     return home_addr;
+}
+
+const char *homeState()
+{
+    if (!active || settings.home_ssid[0] == '\0') {
+        return "";
+    }
+    if (home_addr[0] != '\0') {
+        return "joined";
+    }
+    if (millis() - join_ms < kJoinMs) {
+        return "joining";
+    }
+    return WiFi.status() == WL_NO_SSID_AVAIL ? "notfound" : "failed";
 }
 
 const char *password()

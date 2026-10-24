@@ -74,8 +74,10 @@ and keys the radio. No computer is involved.
   page with the decodes, the main controls, received WEFAX pictures and the
   logbook download. In the logbook, key Q shows QR codes that join the Wi-Fi
   and fetch the ADIF file
-- **Home network**: with a home Wi-Fi entered in Setup (or on the phone page),
-  the pager joins it besides its own access point whenever its Wi-Fi is on,
+- **Home network**: set up from the phone without typing on the pager. Setup >
+  Home Wi-Fi shows a code that joins the pager and one that opens a page
+  listing the networks in reach, where the password is pasted. The pager then
+  joins that network besides its own access point whenever its Wi-Fi is on,
   and answers there as `digiwave.local`. CBScope on a computer at home then
   takes the logbook over by itself (`/api/log` tells the size of the file,
   `/log.adi` serves it). With Wi-Fi off, the home network is left alone too

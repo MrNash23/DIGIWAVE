@@ -31,4 +31,8 @@ const char *password();
 /// Address in the home network (such as "192.168.1.40"), or an empty string while not joined.
 const char *homeAddress();
 
+/// How joining the home network goes: "" (none set or Wi-Fi off), "joining", "joined",
+/// "notfound" (not in reach) or "failed" (most likely the password).
+const char *homeState();
+
 }  // namespace web
