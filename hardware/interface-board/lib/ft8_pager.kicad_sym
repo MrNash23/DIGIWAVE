@@ -1,0 +1,270 @@
+(kicad_symbol_lib
+  (version 20241209)
+  (generator "kicad-mcp")
+  (generator_version "9.0")
+  (symbol "ES8311"
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U"
+      (at 2.54 0 0)
+      (effects
+        (font (size 1.27 1.27))
+      )
+    )
+    (property "Value" "ES8311"
+      (at 0 -2.54 0)
+      (effects
+        (font (size 1.27 1.27))
+      )
+    )
+    (property "Footprint" "Package_DFN_QFN:QFN-20-1EP_3x3mm_P0.4mm_EP1.65x1.65mm"
+      (at 0 -5.08 0)
+      (effects
+        (font (size 1.27 1.27))
+      )
+      (hide yes)
+    )
+    (property "Datasheet" "https://www.lcsc.com/datasheet/C962342.pdf"
+      (at 0 -7.62 0)
+      (effects
+        (font (size 1.27 1.27))
+      )
+      (hide yes)
+    )
+    (property "Description" "Low power mono audio codec, ADC + DAC, I2S, I2C control, QFN-20 3x3mm"
+      (at 0 -10.16 0)
+      (effects
+        (font (size 1.27 1.27))
+      )
+      (hide yes)
+    )
+    (property "ki_keywords" "audio codec I2S mono Everest"
+      (at 0 0 0)
+      (effects
+        (font (size 1.27 1.27))
+      )
+      (hide yes)
+    )
+    (symbol "ES8311_0_1"
+      (rectangle
+        (start -10.16 20.32)
+					(end 10.16 -20.32)
+        (stroke (width 0.254) (type default))
+        (fill (type background))
+      )
+    )
+    (symbol "ES8311_1_1"
+      (pin input line
+        (at -12.7 17.78 0)
+        (length 2.54)
+        (name "CCLK"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "1"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin bidirectional line
+        (at -12.7 12.7 0)
+        (length 2.54)
+        (name "CDATA"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "19"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin input line
+        (at -12.7 7.62 0)
+        (length 2.54)
+        (name "CE"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "20"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin input line
+        (at -12.7 2.54 0)
+        (length 2.54)
+        (name "MCLK"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "2"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin input line
+        (at -12.7 -2.54 0)
+        (length 2.54)
+        (name "SCLK"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "6"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin input line
+        (at -12.7 -7.62 0)
+        (length 2.54)
+        (name "LRCK"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "8"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin input line
+        (at -12.7 -12.7 0)
+        (length 2.54)
+        (name "DSDIN"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "9"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin output line
+        (at -12.7 -17.78 0)
+        (length 2.54)
+        (name "ASDOUT"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "7"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin input line
+        (at 12.7 17.78 180)
+        (length 2.54)
+        (name "MIC1P"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "18"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin input line
+        (at 12.7 12.7 180)
+        (length 2.54)
+        (name "MIC1N"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "17"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin output line
+        (at 12.7 5.08 180)
+        (length 2.54)
+        (name "OUTP"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "12"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin output line
+        (at 12.7 0 180)
+        (length 2.54)
+        (name "OUTN"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "13"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin passive line
+        (at 12.7 -7.62 180)
+        (length 2.54)
+        (name "VMID"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "16"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin passive line
+        (at 12.7 -12.7 180)
+        (length 2.54)
+        (name "ADCVREF"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "15"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin passive line
+        (at 12.7 -17.78 180)
+        (length 2.54)
+        (name "DACVREF"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "14"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin power_in line
+        (at -5.08 22.86 270)
+        (length 2.54)
+        (name "PVDD"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "3"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin power_in line
+        (at -2.54 22.86 270)
+        (length 2.54)
+        (name "DVDD"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "4"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin power_in line
+        (at 5.08 22.86 270)
+        (length 2.54)
+        (name "AVDD"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "11"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin power_in line
+        (at -2.54 -22.86 90)
+        (length 2.54)
+        (name "DGND"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "5"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin passive line
+        (at 2.54 -22.86 90)
+        (length 2.54)
+        (name "EP"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "21"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+      (pin power_in line
+        (at 5.08 -22.86 90)
+        (length 2.54)
+        (name "AGND"
+          (effects (font (size 1.27 1.27)))
+        )
+        (number "10"
+          (effects (font (size 1.27 1.27)))
+        )
+      )
+    )
+  )
+)

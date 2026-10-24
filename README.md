@@ -87,12 +87,26 @@ and keys the radio. No computer is involved.
   <img src="docs/digiwave-menu.jpg" alt="DIGIWAVE menu on the device" width="640">
 </p>
 
-## Connecting a radio
+## Hardware: connecting a radio
 
-An interface board on the pager's 12-pin port carries its own audio codec
-with line in, line out and a PTT output for the radio. The firmware uses it
+<table>
+  <tr>
+    <td width="40%"><img src="docs/hardware/interface-board.jpg" alt="DIGIWAVE interface board"></td>
+    <td width="30%"><img src="docs/hardware/case-exploded.jpg" alt="Case with the board, exploded view"></td>
+    <td width="30%"><img src="docs/hardware/case-connector.jpg" alt="Case from below with the 12-pin header"></td>
+  </tr>
+</table>
+
+A small interface board plugs into the pager's 12-pin port. It carries its own
+ES8311 audio codec with line in, line out and a PTT output, and connects to
+the radio with one TRRS cable wired like the Digirig. The firmware uses it
 whenever it is plugged in (Setup, "Audio"); receive and transmit levels are set
-in the setup and with the trimmers on the board.
+in the setup and with the two trimmers, which can be reached through the lid of
+its 3D-printed case.
+
+Schematic, KiCad project, Gerber files with parts list, 3D views and the STL
+files of the case are in [`hardware`](hardware), described on its own
+[page](hardware/README.md).
 
 Without the board, audio goes through the built-in microphone and speaker of
 the pager, so reception works held next to the speaker of any receiver.
@@ -161,6 +175,7 @@ the phone page.
 - `lib/ft8_lib` - vendored [kgoba/ft8_lib](https://github.com/kgoba/ft8_lib) (MIT)
 - `src` - firmware: audio and PTT interfaces, engine, user interface, web interface
 - `test` - host tests and reference recordings from ft8_lib
+- `hardware` - interface board (KiCad project, schematic, fabrication files) and printed case
 - `PROJEKT.md` - description of the project in German
 
 ## Licence and credits

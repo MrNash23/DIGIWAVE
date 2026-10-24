@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "ft8_pager")(type "KiCad")(uri "${KIPRJMOD}/lib/ft8_pager.kicad_sym")(options "")(descr ""))
+)
