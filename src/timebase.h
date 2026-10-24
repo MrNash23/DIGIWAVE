@@ -5,10 +5,11 @@
 #include <stdint.h>
 
 /// UTC clock for FT8 slot timing. GPS with its PPS pulse is the reference;
-/// the battery-backed RTC bridges the time without a fix.
+/// without a fix the time of a phone on the web interface stands in, and the
+/// battery-backed RTC bridges the time in between.
 namespace timebase {
 
-enum class Source { None, Rtc, Gps, GpsPps };
+enum class Source { None, Rtc, Phone, Gps, GpsPps };
 
 void begin();
 
@@ -22,7 +23,11 @@ const char *sourceName();
 /// UTC in milliseconds since 1970, including the manual correction.
 int64_t utcMs();
 
-/// Manual correction added to the clock, for operation without GPS.
+/// Corrects the clock by what a phone measured against utcMs(), and writes the RTC.
+/// Ignored while GPS sets the clock; returns whether the correction was taken.
+bool setFromPhone(int64_t adjust_ms);
+
+/// Manual correction added to the clock while it runs on the RTC.
 void setOffsetMs(int32_t ms);
 
 int satellites();

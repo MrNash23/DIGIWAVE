@@ -23,6 +23,9 @@ bool submitText(const char *text);
 /// Saves the WEFAX picture received so far, as Enter does. Returns the number of lines written, 0 if none.
 unsigned saveFaxNowForTest();
 
+/// Battery readings over the serial line, for the diagnostic command "g".
+void printBattery();
+
 /// Saved WEFAX pictures are in this directory on the SD card.
 extern const char kFaxDir[];
 extern const char kSstvDir[];

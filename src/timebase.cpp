@@ -22,12 +22,12 @@ volatile uint32_t pps_count = 0;
 uint32_t pps_seen = 0;
 uint32_t last_rtc_write = 0;
 bool rtc_written = false;
-uint32_t last_gps_sync = 0;  // millis() of the last time the clock was set from GPS
+uint32_t last_sync = 0;  // millis() of the last time the clock was set from GPS or a phone
 
 // GPS time is only trusted together with a position fix in the same second or the one before
 constexpr uint32_t kMaxFixAgeMs = 2500;
-// After the last fix the clock keeps running on the processor's crystal, which drifts
-// by about 20 ms in this time. Then it counts as RTC quality again.
+// After the last fix, or the last time from a phone, the clock keeps running on the
+// processor's crystal, which drifts by about 20 ms in this time. Then it counts as RTC quality again.
 constexpr uint32_t kGpsHoldMs = 20UL * 60UL * 1000UL;
 // Delay between the start of a second and its NMEA sentence, used without PPS
 constexpr int kNmeaDelayMs = 150;
@@ -84,7 +84,7 @@ void readRtc()
 void writeRtc()
 {
     // Set the RTC right after a second boundary so that it ticks in phase with UTC.
-    // Only called while GPS is the source, so utcMs() is the plain GPS time.
+    // Only called while GPS or a phone is the source, so utcMs() has no manual correction.
     int64_t ms = utcMs();
     if (ms % 1000 > 50) {
         return;
@@ -139,23 +139,26 @@ void poll()
                 // The sentence names the second that began with the last pulse
                 pps_seen = count;
                 setClock(sentence_ms, pps, Source::GpsPps);
-                last_gps_sync = millis();
+                last_sync = millis();
             } else if (source() != Source::GpsPps || since_pps_us > 3000000) {
                 setClock(sentence_ms, now_us - (int64_t)gps.time.age() * 1000 - kNmeaDelayMs * 1000, Source::Gps);
-                last_gps_sync = millis();
+                last_sync = millis();
             }
         }
     }
 
     // Without a fix the module keeps sending sentences, so their arrival says nothing;
-    // what counts is how long ago the clock was last set from a fix.
-    if ((src == Source::Gps || src == Source::GpsPps) && millis() - last_gps_sync > kGpsHoldMs) {
+    // what counts is how long ago the clock was last set from a fix or a phone.
+    if (src != Source::Rtc && src != Source::None && millis() - last_sync > kGpsHoldMs) {
         portENTER_CRITICAL(&mux);
         src = Source::Rtc;
         portEXIT_CRITICAL(&mux);
     }
 
-    if ((src == Source::Gps || src == Source::GpsPps) && (!rtc_written || millis() - last_rtc_write > 3600000UL)) {
+    // A time from a phone goes into the RTC at once: the phone may be gone in an hour
+    bool gps_time = src == Source::Gps || src == Source::GpsPps;
+    bool phone_new = src == Source::Phone && (int32_t)(last_rtc_write - last_sync) < 0;
+    if ((gps_time || src == Source::Phone) && (!rtc_written || millis() - last_rtc_write > 3600000UL || phone_new)) {
         writeRtc();
     }
 }
@@ -178,6 +181,7 @@ const char *sourceName()
     switch (source()) {
     case Source::GpsPps: return "GPS+";
     case Source::Gps: return "GPS";
+    case Source::Phone: return "PHONE";
     case Source::Rtc: return "RTC";
     case Source::None: break;
     }
@@ -189,12 +193,34 @@ int64_t utcMs()
     int64_t now_us = esp_timer_get_time();
     portENTER_CRITICAL(&mux);
     int64_t ms = base_ms + (now_us - ref_us) / 1000;
-    // The manual correction is for the RTC; GPS time needs none
-    if (src != Source::Gps && src != Source::GpsPps) {
+    // The manual correction is for the RTC; GPS and phone time need none
+    if (src == Source::Rtc || src == Source::None) {
         ms += offset_ms;
     }
     portEXIT_CRITICAL(&mux);
     return ms;
+}
+
+bool setFromPhone(int64_t adjust_ms)
+{
+    int64_t now_us = esp_timer_get_time();
+    portENTER_CRITICAL(&mux);
+    bool gps = src == Source::Gps || src == Source::GpsPps;
+    if (!gps) {
+        // The phone measured against utcMs(), so the correction applies to that
+        int64_t ms = base_ms + (now_us - ref_us) / 1000 + adjust_ms;
+        if (src == Source::Rtc || src == Source::None) {
+            ms += offset_ms;
+        }
+        base_ms = ms;
+        ref_us = now_us;
+        src = Source::Phone;
+    }
+    portEXIT_CRITICAL(&mux);
+    if (!gps) {
+        last_sync = millis();
+    }
+    return !gps;
 }
 
 void setOffsetMs(int32_t ms)
@@ -212,7 +238,7 @@ void printDiagnostics()
     int64_t last_pps = pps_us;
     portEXIT_CRITICAL(&mux);
     int64_t now = utcMs();
-    Serial.printf("[gps] utc_ms %lld, last sync %d s ago\n", (long long)now, last_gps_sync ? (int)((millis() - last_gps_sync) / 1000) : -1);
+    Serial.printf("[gps] utc_ms %lld, last sync %d s ago\n", (long long)now, last_sync ? (int)((millis() - last_sync) / 1000) : -1);
     Serial.printf("[gps] chars %u, sentences ok %u / failed %u, sats %d, fix %s (age %u ms), time %02d:%02d:%02d (age %u ms), "
                   "date %s, pps %u (last %d ms ago), clock %s\n",
                   (unsigned)gps.charsProcessed(), (unsigned)gps.passedChecksum(), (unsigned)gps.failedChecksum(), satellites(),

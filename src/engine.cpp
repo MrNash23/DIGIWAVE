@@ -20,6 +20,7 @@ extern "C" {
 
 #include "settings.h"
 #include "timebase.h"
+#include "voice.h"
 
 namespace engine {
 
@@ -34,7 +35,7 @@ AudioIo *audio = nullptr;
 Ptt *ptt = nullptr;
 
 SemaphoreHandle_t lock;
-QueueHandle_t wf_queue, log_queue, rx_text_queue, tx_text_queue, fax_line_queue, fax_event_queue;
+QueueHandle_t wf_queue, log_queue, news_queue, rx_text_queue, tx_text_queue, fax_line_queue, fax_event_queue;
 
 ft8::Decoder ft_decoder;
 ft8::Synth ft_synth;
@@ -198,6 +199,7 @@ bool readChunk(int16_t *pcm)
 
 void pttOn()
 {
+    voice::radioTx(true);  // waits for an announcement that shares the speaker
     ptt->set(true);
     audio->setOutputEnabled(true);
     Guard g;
@@ -213,6 +215,7 @@ void pttOff()
     }
     audio->setOutputEnabled(false);
     ptt->set(false);
+    voice::radioTx(false);
     {
         Guard g;
         st.transmitting = false;
@@ -222,10 +225,46 @@ void pttOff()
 
 // --- FT8 / FT4 -----------------------------------------------------------------------
 
+bool slot_logged = false;  // a QSO was completed while the decodes of a slot were processed
+
 void onQsoComplete(const ft8::QsoRecord &rec, void *ctx)
 {
     LogItem item{rec, *(ft8::Protocol *)ctx};
     xQueueSend(log_queue, &item, 0);
+    slot_logged = true;
+}
+
+/// Collects what is worth an announcement from the decodes of a slot.
+/// Called with the lock held, around qso.onDecoded().
+void postNews(const ft8::Decoded *list, int count, ft8::Qso::State before, ft8::Qso::State after)
+{
+    using S = ft8::Qso::State;
+    SlotNews news{};
+    news.qso_logged = slot_logged;
+    news.qso_started = (before == S::CallingCq || before == S::Calling) &&
+                       (after == S::SendReport || after == S::SendRReport || after == S::SendRR73);
+    if (before == S::Idle) {
+        for (int i = 0; i < count; ++i) {
+            const ft8::Decoded &d = list[i];
+            if (d.call_de[0] == '\0') {
+                continue;
+            }
+            if (d.is_cq && news.cqs < (int)(sizeof(news.cq_call) / sizeof(news.cq_call[0]))) {
+                strncpy(news.cq_call[news.cqs++], d.call_de, sizeof(news.cq_call[0]) - 1);
+            }
+            // A first call with a locator or nothing; reports and sign-offs belong to a QSO that is over
+            int report;
+            bool has_r;
+            bool closing = ft8::parseReport(d.extra, &report, &has_r) || strcmp(d.extra, "RR73") == 0 ||
+                           strcmp(d.extra, "RRR") == 0 || strcmp(d.extra, "73") == 0;
+            if (cfg.my_call[0] != '\0' && strcmp(d.call_to, cfg.my_call) == 0 && !closing) {
+                news.called = true;
+            }
+        }
+    }
+    if (news.qso_started || news.qso_logged || news.called || news.cqs > 0) {
+        xQueueSend(news_queue, &news, 0);
+    }
 }
 
 // Locators heard so far, so that later messages of a station can show it too
@@ -432,7 +471,10 @@ void stepSlotMode(Mode m, int16_t *pcm)
             st.decode_ms = (int)took;
             log_protocol = protocol;
             qso.onComplete(onQsoComplete, &log_protocol);
+            ft8::Qso::State before = qso.state();
+            slot_logged = false;
             qso.onDecoded(decoded, n, parity, (uint32_t)(timebase::utcMs() / 1000));
+            postNews(decoded, n, before, qso.state());
             refreshQsoStatus();
         }
         Serial.printf("[dw] %s slot %02u:%02u:%02u  %d decoded in %u ms\n", pi.name, (unsigned)(slot_utc / 3600 % 24),
@@ -772,6 +814,7 @@ void begin(AudioIo &a, Ptt &p)
     lock = xSemaphoreCreateMutex();
     wf_queue = xQueueCreate(8, kWaterfallBins);
     log_queue = xQueueCreate(4, sizeof(LogItem));
+    news_queue = xQueueCreate(2, sizeof(SlotNews));
     rx_text_queue = xQueueCreate(512, sizeof(char));
     tx_text_queue = xQueueCreate(256, sizeof(char));
     // Picture lines wait here for the main loop, which is busy for seconds while
@@ -918,14 +961,42 @@ void setTxEnabled(bool on)
     }
 }
 
+int cq_parity = -1;  // guarded by lock; chosen with toggleTxParity(), -1 = the next slot
+
+int nextParity()
+{
+    int slot_ms = ft8::info(protocolOf(requested_mode)).slot_ms;
+    return (int)((timebase::utcMs() / slot_ms + 1) & 1);
+}
+
 void startCq()
 {
     Guard g;
-    // The next slot to begin is ours
-    int slot_ms = ft8::info(protocolOf(requested_mode)).slot_ms;
-    int next_parity = (int)((timebase::utcMs() / slot_ms + 1) & 1);
-    qso.startCq(next_parity);
+    // The chosen slots, or else the next slot to begin is ours
+    qso.startCq(cq_parity >= 0 ? cq_parity : nextParity());
     refreshQsoStatus();
+}
+
+int toggleTxParity()
+{
+    using S = ft8::Qso::State;
+    Guard g;
+    S s = qso.state();
+    if (s != S::Idle && s != S::CallingCq) {
+        return -1;
+    }
+    int current = s == S::CallingCq ? qso.txParity() : (cq_parity >= 0 ? cq_parity : nextParity());
+    cq_parity = current ^ 1;
+    if (s == S::CallingCq) {
+        qso.setTxParity(cq_parity);
+    }
+    return cq_parity;
+}
+
+int txParity()
+{
+    Guard g;
+    return qso.active() ? qso.txParity() : cq_parity;
 }
 
 void answer(const Entry &e)
@@ -954,6 +1025,11 @@ void answer(const Entry &e)
 bool nextLogItem(LogItem *item)
 {
     return xQueueReceive(log_queue, item, 0) == pdTRUE;
+}
+
+bool nextSlotNews(SlotNews *news)
+{
+    return xQueueReceive(news_queue, news, 0) == pdTRUE;
 }
 
 size_t readText(char *out, size_t max)

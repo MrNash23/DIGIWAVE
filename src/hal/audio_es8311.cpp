@@ -31,14 +31,14 @@ public:
         size_t done = 0;
         while (done < count) {
             size_t n = min(count - done, (size_t)kChunk);
-            if (!readRaw(_io, n * kFactor)) {
+            if (!readRaw(_rx_io, n * kFactor)) {
                 return false;
             }
             for (size_t i = 0; i < n; ++i) {
                 // Shift four new input samples into the history, then filter once
                 memmove(_rx_hist, _rx_hist + kFactor, (kTaps - kFactor) * sizeof(float));
                 for (int k = 0; k < kFactor; ++k) {
-                    _rx_hist[kTaps - kFactor + k] = _io[i * kFactor + k];
+                    _rx_hist[kTaps - kFactor + k] = _rx_io[i * kFactor + k];
                 }
                 float acc = 0;
                 for (int t = 0; t < kTaps; ++t) {
@@ -68,10 +68,10 @@ public:
                     for (int t = 0; t < kTaps; ++t) {
                         acc += _fir[t] * _tx_hist[t];
                     }
-                    _io[i * kFactor + k] = (int16_t)constrain(acc, -32768.0f, 32767.0f);
+                    _tx_io[i * kFactor + k] = (int16_t)constrain(acc, -32768.0f, 32767.0f);
                 }
             }
-            if (!writeRaw(_io, n * kFactor)) {
+            if (!writeRaw(_tx_io, n * kFactor)) {
                 return false;
             }
             done += n;
@@ -111,7 +111,10 @@ private:
     float _fir[kTaps];
     float _rx_hist[kTaps] = {0};
     float _tx_hist[kTaps] = {0};
-    int16_t _io[kChunk * kFactor];
+    // One buffer per direction: the speaker of the built-in codec may play an
+    // announcement from another task while the engine reads the microphone
+    int16_t _rx_io[kChunk * kFactor];
+    int16_t _tx_io[kChunk * kFactor];
 };
 
 // --- built-in codec ---------------------------------------------------------------------

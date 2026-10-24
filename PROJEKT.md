@@ -73,7 +73,16 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
 
 Gebaut wird mit PlatformIO und der pioarduino-Plattform (Arduino-ESP32 3.3).
 Auf dem Pager liegt DIGIWAVE als eine App neben anderen (zum Beispiel
-Meshtastic) und wird über den Launcher von bmorcelli gestartet.
+Meshtastic) und wird über den Launcher von bmorcelli gestartet. Ein Update
+kommt per USB direkt in den Platz von DIGIWAVE:
+
+    esptool.py write_flash 0x870000 .pio/build/pager/firmware.bin
+
+Nicht `pio run -t upload` verwenden: Das schreibt Bootloader und
+`partitions.csv` mit und löscht damit Launcher und die anderen Apps.
+
+Die Sprachansagen spricht Piper mit der Stimme „ljspeech“ (gemeinfreier
+Datensatz); neu erzeugt werden sie mit `tools/make_voice.py`.
 
 ## Stand
 

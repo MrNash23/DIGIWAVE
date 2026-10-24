@@ -59,6 +59,10 @@ public:
     /// Start calling CQ in slots of the given parity (0 = even, 1 = odd).
     void startCq(int tx_parity);
 
+    /// Moves a CQ call to the slots of the other parity. Only meant while calling CQ:
+    /// in a QSO the parity follows the other station.
+    void setTxParity(int tx_parity) { _tx_parity = tx_parity & 1; }
+
     /// Call the station that sent the given message, heard in a slot of rx_parity.
     void answer(const Decoded &d, int rx_parity, uint32_t now);
 

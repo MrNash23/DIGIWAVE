@@ -44,6 +44,8 @@ struct Settings {
     bool ptt_active_high = true;
     bool audio_board = true;    // line in and out of the interface board when it is plugged in
     bool wifi_on = false;       // access point with the web interface
+    bool voice = false;         // spoken announcements in FT8 and FT4
+    int voice_volume = 100;     // percent
     char wifi_pass[20] = "digiwave";
 
     int cw_wpm = 20;            // sending speed

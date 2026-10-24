@@ -101,6 +101,15 @@ int qsoHistory(Entry *out, int max);
 
 void setTxEnabled(bool on);
 void startCq();
+
+/// Switches CQ calls between the first (even) and the second (odd) slots; the
+/// choice holds for later CQ calls too. Returns the new parity, or -1 during a
+/// QSO, whose slots follow the other station.
+int toggleTxParity();
+
+/// Parity of the slots we transmit or will call CQ in, -1 while not chosen
+/// (CQ then starts in the next slot).
+int txParity();
 void answer(const Entry &e);
 
 struct LogItem {
@@ -110,6 +119,18 @@ struct LogItem {
 
 /// Fetches a completed QSO for logging. Returns false if none is waiting.
 bool nextLogItem(LogItem *item);
+
+/// What happened in one decoded slot that is worth an announcement
+struct SlotNews {
+    bool qso_started;   // a station answered our CQ or our call
+    bool qso_logged;
+    bool called;        // someone calls us while we are in no QSO
+    int cqs;            // stations calling CQ, only while we are in no QSO
+    char cq_call[6][14];
+};
+
+/// Fetches the news of a slot. Returns false if none is waiting.
+bool nextSlotNews(SlotNews *news);
 
 // --- CW, RTTY, NAVTEX ---------------------------------------------------------------
 

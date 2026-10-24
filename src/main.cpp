@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "timebase.h"
 #include "ui.h"
+#include "voice.h"
 
 // Drawing with LVGL needs more than the 8 kB the main task gets by default
 SET_LOOP_TASK_STACK_SIZE(24 * 1024);
@@ -53,6 +54,8 @@ void setup()
     }
     audio_on_board = board;
     Serial.printf("[dw] audio %s\n", board ? "interface board" : "built-in");
+    // Announcements use the speaker, which is the path to the radio without the board
+    voice::begin(es8311Audio(), !board);
     engine::begin(audio, ptt);
     ui::begin();
     Serial.println("[dw] running");
@@ -61,7 +64,8 @@ void setup()
 // Diagnostic commands over USB serial: "m 0".."m 5" selects a mode,
 // "s TEXT" sends text in CW or RTTY, "r N" records N seconds of received
 // audio and prints it as hexadecimal 16-bit samples, "f 1" saves the WEFAX picture received so far, "g 1" prints the state of
-// GPS reception and of the clock, "n $GP..." feeds a GPS sentence to the clock.
+// GPS reception and of the clock, "n $GP..." feeds a GPS sentence to the clock,
+// "v 0".."v 3" plays an announcement.
 void pollSerialCommands()
 {
     static char line[96];
@@ -101,6 +105,7 @@ void pollSerialCommands()
                     engine::applySettings();
                 } else if (line[0] == 'g') {
                     timebase::printDiagnostics();
+                    ui::printBattery();
                     Serial.printf("[mem] internal free %u (lowest %u), PSRAM free %u (lowest %u), uptime %lu s\n",
                                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(), (unsigned)ESP.getFreePsram(),
                                   (unsigned)ESP.getMinFreePsram(), (unsigned long)(millis() / 1000));
@@ -119,6 +124,8 @@ void pollSerialCommands()
                 } else if (line[0] == 'r') {
                     engine::capture((size_t)constrain(atoi(line + 2), 1, 60) * 12000);
                     recording = true;
+                } else if (line[0] == 'v') {
+                    voice::say((voice::Phrase)constrain(atoi(line + 2), 0, 3));
                 } else if (line[0] == 's') {
                     Serial.printf("[dw] send: %s\n", ui::submitText(line + 2) ? "queued" : "mode cannot send");
                 }
@@ -134,5 +141,6 @@ void loop()
 {
     timebase::poll();
     pollSerialCommands();
+    voice::poll();
     ui::loop();
 }

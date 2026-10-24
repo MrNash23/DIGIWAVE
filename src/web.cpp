@@ -185,7 +185,17 @@ function render(){
     if(h.de&&!h.own)tr.onclick=()=>answer(h);
     tb.appendChild(tr)}
 }
-async function poll(){try{S=await (await fetch('/api/state')).json();render()}catch(e){}}
+// Without GPS the device takes the phone's time. Like NTP: the difference is measured
+// a few times, and the measurement with the shortest round trip is the most exact.
+let synced=0;
+async function syncTime(){
+  synced=Date.now();let best=null;
+  for(let i=0;i<5;i++){try{const t0=Date.now();const d=(await (await fetch('/api/time',{cache:'no-store'})).json()).t;const t1=Date.now();
+    if(!best||t1-t0<best.rtt)best={rtt:t1-t0,adj:Math.round((t0+t1)/2-d)}}catch(e){}}
+  if(best&&best.rtt<400)post('/api/time',{adj:best.adj,rtt:best.rtt})
+}
+async function poll(){try{S=await (await fetch('/api/state')).json();render();
+  if(S.src!='GPS'&&S.src!='GPS+'&&Date.now()-synced>600000)syncTime()}catch(e){}}
 setInterval(poll,2000);poll();
 </script></body></html>
 )HTML";
@@ -284,6 +294,35 @@ void handleState()
     out += "]}";
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", out);
+}
+
+void handleTimeGet()
+{
+    char buf[40];
+    snprintf(buf, sizeof(buf), "{\"t\":%lld}", (long long)timebase::utcMs());
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", buf);
+}
+
+/// The page measures how far the clock is from the phone's and sends the difference
+void handleTimePost()
+{
+    int64_t adjust = strtoll(server.arg("adj").c_str(), nullptr, 10);
+    int rtt = server.arg("rtt").toInt();
+    if (!timebase::setFromPhone(adjust)) {
+        server.send(200, "text/plain", "Clock runs on GPS");
+        return;
+    }
+    // With the exact time the manual correction for the RTC is no longer right
+    if (settings.time_offset_ds != 0) {
+        settings.time_offset_ds = 0;
+        settings.save();
+        timebase::setOffsetMs(0);
+    }
+    Serial.printf("[web] clock set from the phone, corrected by %lld ms (round trip %d ms)\n", (long long)adjust, rtt);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Clock set from the phone (%+.1f s)", adjust / 1000.0);
+    server.send(200, "text/plain", buf);
 }
 
 bool stationConfigured()
@@ -544,6 +583,8 @@ void start()
         server.send_P(200, "image/png", (const char *)web_icon_png, web_icon_png_size);
     });
     server.on("/api/state", HTTP_GET, handleState);
+    server.on("/api/time", HTTP_GET, handleTimeGet);
+    server.on("/api/time", HTTP_POST, handleTimePost);
     server.on("/api/cmd", HTTP_POST, handleCmd);
     server.on("/api/answer", HTTP_POST, handleAnswer);
     server.on("/api/settings", HTTP_POST, handleSettings);

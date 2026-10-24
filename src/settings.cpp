@@ -41,6 +41,8 @@ void Settings::load()
     grid_auto = p.getBool("gridauto", grid_auto);
     cb_mode = p.getBool("cbmode", cb_mode);
     wifi_on = p.getBool("wifi", wifi_on);
+    voice = p.getBool("voice", voice);
+    voice_volume = p.getInt("voicevol", voice_volume);
     p.getString("wifipw", wifi_pass, sizeof(wifi_pass));
     cw_wpm = p.getInt("cwwpm", cw_wpm);
     cw_tone = p.getInt("cwtone", cw_tone);
@@ -87,6 +89,8 @@ void Settings::save() const
     p.putBool("gridauto", grid_auto);
     p.putBool("cbmode", cb_mode);
     p.putBool("wifi", wifi_on);
+    p.putBool("voice", voice);
+    p.putInt("voicevol", voice_volume);
     p.putString("wifipw", wifi_pass);
     p.putInt("cwwpm", cw_wpm);
     p.putInt("cwtone", cw_tone);

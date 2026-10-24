@@ -6,6 +6,8 @@
 #include <LV_Helper.h>
 #include <SD.h>
 
+#include <algorithm>
+
 #include <band_plan.h>
 #include <ft8_adif.h>
 
@@ -71,7 +73,7 @@ void powerDown(const char *reason);
 // --- widgets shared by the mode screens ------------------------------------------
 
 struct Header {
-    lv_obj_t *time, *gps, *txrx, *state, *level, *slot;
+    lv_obj_t *time, *gps, *txrx, *state, *level, *slot, *battery;
 };
 
 struct Waterfall {
@@ -139,12 +141,14 @@ void setIcon(lv_obj_t *img, const lv_image_dsc_t *src, lv_color_t color)
 }
 
 /// GPS icon for the state of the clock: cyan with pulse-per-second, white with
-/// GPS time, amber on the RTC alone, magenta without any time.
+/// GPS time, white without fix with the time of a phone, amber on the RTC alone,
+/// magenta without any time.
 void drawClockIcon(lv_obj_t *img)
 {
     switch (timebase::source()) {
     case timebase::Source::GpsPps: setIcon(img, &img_status_gps_fix, kColCq); break;
     case timebase::Source::Gps: setIcon(img, &img_status_gps_fix, kColText); break;
+    case timebase::Source::Phone: setIcon(img, &img_status_gps_no_fix, kColText); break;
     case timebase::Source::Rtc: setIcon(img, &img_status_gps_no_fix, kColWarn); break;
     case timebase::Source::None: setIcon(img, &img_status_gps_no_fix, kColTx); break;
     }
@@ -159,6 +163,78 @@ lv_obj_t *makeScreen()
     return scr;
 }
 
+// --- battery ----------------------------------------------------------------------------
+
+// Resting voltage of a LiPo cell against its charge, from 100 % down in steps of
+// 5 %. The curve is flat in the middle and steep at both ends, so a straight line
+// between 3.3 and 4.2 V would be far off.
+const uint16_t kLipoMv[21] = {4200, 4150, 4110, 4080, 4020, 3980, 3950, 3910, 3870, 3850, 3840,
+                              3820, 3800, 3790, 3770, 3750, 3730, 3710, 3690, 3610, 3270};
+constexpr int kCellMilliohm = 150;  // internal resistance, cell and wiring
+
+int lipoPercent(int mv)
+{
+    if (mv >= kLipoMv[0]) {
+        return 100;
+    }
+    for (int i = 1; i < 21; ++i) {
+        if (mv >= kLipoMv[i]) {
+            // Straight between the two points of the curve
+            int hi = kLipoMv[i - 1], lo = kLipoMv[i];
+            return (20 - i) * 5 + 5 * (mv - lo) / max(1, hi - lo);
+        }
+    }
+    return 0;
+}
+
+struct Battery {
+    int percent = -1;      // -1 until the first reading
+    bool charging = false; // USB power present
+    int mv = 0, ma = 0, gauge = 0, curve = 0;
+};
+Battery battery;
+
+/// Reads the gauge every few seconds. The gauge keeps its own model of the cell;
+/// it is taken when it agrees with the voltage curve, which needs no learning.
+const Battery &readBattery()
+{
+    static uint32_t last = 0;
+    if (battery.percent >= 0 && millis() - last < 5000) {
+        return battery;
+    }
+    last = millis();
+    instance.gauge.refresh();  // the readings are only fetched from the chip on request
+    battery.mv = instance.gauge.getVoltage();
+    battery.ma = instance.gauge.getCurrent();  // negative while discharging
+    battery.gauge = instance.gauge.getStateOfCharge();
+    battery.charging = instance.ppm.isVbusIn();
+    // The voltage under load is lower than at rest by current times resistance
+    int rest_mv = battery.mv - battery.ma * kCellMilliohm / 1000;
+    battery.curve = lipoPercent(rest_mv);
+    int value = (battery.gauge > 0 && battery.gauge <= 100 && abs(battery.gauge - battery.curve) <= 20) ? battery.gauge : battery.curve;
+    if (battery.mv < 2500) {
+        value = battery.gauge;  // no plausible voltage: the gauge is all there is
+    }
+    // Smoothed, so that a burst of transmitting does not make it jump
+    battery.percent = battery.percent < 0 ? value : (battery.percent * 3 + value + 2) / 4;
+    return battery;
+}
+
+lv_color_t batteryColor(const Battery &b)
+{
+    if (b.charging) {
+        return kColCq;
+    }
+    return b.percent < 15 ? kColTx : (b.percent < 35 ? kColWarn : kColText);
+}
+
+void drawBattery(lv_obj_t *label)
+{
+    const Battery &b = readBattery();
+    lv_label_set_text_fmt(label, "%d%%", constrain(b.percent, 0, 100));
+    lv_obj_set_style_text_color(label, batteryColor(b), 0);
+}
+
 Header makeHeader(lv_obj_t *scr, bool with_slot)
 {
     Header h{};
@@ -171,7 +247,10 @@ Header makeHeader(lv_obj_t *scr, bool with_slot)
     } else {
         h.state = makeLabel(scr, 124, 1, 284, &lv_font_montserrat_14, kColText);
     }
-    h.level = makeBar(scr, 414, 5, 62, 8, kColCq);
+    // Input level, then the battery in the corner
+    h.level = makeBar(scr, 414, 5, 30, 8, kColCq);
+    h.battery = makeLabel(scr, 446, 2, 32, &lv_font_montserrat_12, kColText);
+    lv_obj_set_style_text_align(h.battery, LV_TEXT_ALIGN_RIGHT, 0);
     return h;
 }
 
@@ -184,6 +263,7 @@ void drawHeader(const Header &h, const engine::Status &st)
     lv_bar_set_value(h.level, st.level, LV_ANIM_OFF);
     // Magenta from -3 dBFS: the input is close to clipping
     lv_obj_set_style_bg_color(h.level, st.level > 95 ? kColTx : kColCq, LV_PART_INDICATOR);
+    drawBattery(h.battery);
 }
 
 Waterfall makeWaterfall(lv_obj_t *scr, int y, int height)
@@ -205,12 +285,75 @@ int waterfallX(float hz)
     return kWfX + (int)((hz - engine::kWaterfallMinHz) / engine::kWaterfallBinHz);
 }
 
+// The spectrum averaged over about half a minute, both slots of a pair, for
+// finding a free place to transmit on
+float wf_avg[engine::kWaterfallBins];
+int wf_avg_rows = 0;
+constexpr int kAvgRows = 176;  // a row every 2048 samples at 12 kHz: 30 s
+
+void averageSpectrum(const uint8_t *row)
+{
+    // A plain mean until the time is full, then a running one
+    float a = 1.0f / (float)(min(wf_avg_rows, kAvgRows - 1) + 1);
+    for (int b = 0; b < engine::kWaterfallBins; ++b) {
+        wf_avg[b] += a * ((float)row[b] - wf_avg[b]);
+    }
+    if (wf_avg_rows < kAvgRows) {
+        ++wf_avg_rows;
+    }
+}
+
+/// Lowest tone of the quietest place for a signal of the given width, near the
+/// present TX frequency when several are equally quiet. -1 before half the time is heard.
+int findFreeSpot(float width_hz)
+{
+    if (wf_avg_rows < kAvgRows / 2) {
+        return -1;
+    }
+    auto bin = [](float hz) {
+        return constrain((int)((hz - engine::kWaterfallMinHz) / engine::kWaterfallBinHz), 0, engine::kWaterfallBins - 1);
+    };
+    // The noise where every receiver passes audio: the quietest fifth of 500-2000 Hz.
+    // Beyond the edges of the receiver filter it is far quieter, but nobody would hear us there.
+    static float sorted[engine::kWaterfallBins];
+    int n = 0;
+    for (int b = bin(500); b <= bin(2000); ++b) {
+        sorted[n++] = wf_avg[b];
+    }
+    std::nth_element(sorted, sorted + n / 5, sorted + n);
+    const float noise = sorted[n / 5];
+    const float guard = 25.0f;  // space to the neighbours on both sides
+
+    int best = -1;
+    float best_score = 0;
+    for (int hz = 300; hz + width_hz <= 2800; hz += 10) {
+        int lo = bin(hz - guard), hi = bin(hz + width_hz + guard);
+        float sum = 0;
+        bool dead = false;
+        for (int b = lo; b <= hi; ++b) {
+            sum += wf_avg[b];
+            dead = dead || wf_avg[b] < noise - 12;  // 6 dB under the noise: outside the filter
+        }
+        if (dead) {
+            continue;
+        }
+        // In 0.5 dB steps; 1000 Hz away from the present frequency weighs 1 dB
+        float score = sum / (float)(hi - lo + 1) + (float)abs(hz - settings.tx_hz) * 0.002f;
+        if (best < 0 || score < best_score) {
+            best = hz;
+            best_score = score;
+        }
+    }
+    return best;
+}
+
 /// Moves new spectrum rows into the given waterfall, or just discards them.
 void drawWaterfall(Waterfall *wf)
 {
     static uint8_t row[engine::kWaterfallBins];
     bool changed = false;
     while (engine::nextWaterfallRow(row)) {
+        averageSpectrum(row);
         if (wf == nullptr || wf->buf == nullptr) {
             continue;
         }
@@ -322,6 +465,34 @@ const lv_color_t kColOwn = lv_color_hex(0xFFD23C);     // our own transmissions
 const lv_color_t kColWorked = lv_color_hex(0x5C5C5C);  // in the logbook on this band
 const lv_color_t kColWorkedElsewhere = lv_color_hex(0x7FA0B8);  // in the logbook on another band
 const lv_color_t kColOwnBg = lv_color_hex(0x2A2408);
+
+// F: the wheel moves the TX frequency until a press or F; Back restores it
+bool tx_tuning = false;
+int tx_hz_before = 0;
+
+void setTxHz(int hz);
+void startTxTuning();
+void endTxTuning(bool keep);
+void freeSpot();
+void toggleSlot();
+
+/// Bandwidth of a signal: 8 tones 6.25 Hz apart in FT8, 4 tones 20.8 Hz apart in FT4
+float signalWidthHz(Mode m)
+{
+    return m == Mode::FT4 ? 83.3f : 50.0f;
+}
+
+/// The slots of a parity; -1 is the next slot, as a CQ call starts without a choice
+const char *slotName(int parity, bool brief)
+{
+    if (parity < 0) {
+        return brief ? "next" : "next free";
+    }
+    if (brief) {
+        return parity ? "2nd" : "1st";
+    }
+    return parity ? "2nd (odd)" : "1st (even)";
+}
 
 void buildSlot()
 {
@@ -479,11 +650,19 @@ void drawSlot()
         }
         lv_obj_set_style_text_color(slot_header.state, kColText, 0);
     }
+    // The marker covers the signal; while tuning it runs down the waterfall
     lv_obj_set_x(tx_marker, waterfallX((float)settings.tx_hz));
+    lv_obj_set_width(tx_marker, max(2, (int)(signalWidthHz(st.mode) / engine::kWaterfallBinHz + 0.5f)));
+    lv_obj_set_height(tx_marker, tx_tuning ? 44 : 3);
+    lv_obj_set_style_bg_opa(tx_marker, tx_tuning ? LV_OPA_50 : LV_OPA_COVER, 0);
 
     if (noticeActive()) {
         lv_label_set_text(slot_footer, notice);
         lv_obj_set_style_text_color(slot_footer, kColWarn, 0);
+    } else if (tx_tuning) {
+        lv_label_set_text_fmt(slot_footer, "TX %d Hz   wheel: move  G: free spot  E: slot %s   press: OK  Back: undo",
+                              settings.tx_hz, slotName(engine::txParity(), true));
+        lv_obj_set_style_text_color(slot_footer, kColCq, 0);
     } else {
         // T shows the state of the transmitter; V tells which list a press brings up
         lv_label_set_text_fmt(slot_footer, "Enter: call  T: TX %s  C: CQ  H: halt  V: %s  B: band  |  %d dec",
@@ -499,6 +678,10 @@ void drawSlot()
 
 void slotRotate(int dir)
 {
+    if (tx_tuning) {
+        setTxHz(settings.tx_hz - dir * 50);  // up raises it, as in the setup
+        return;
+    }
     if (entry_count == 0) {
         return;
     }
@@ -509,6 +692,10 @@ void slotRotate(int dir)
 
 void slotPress()
 {
+    if (tx_tuning) {
+        endTxTuning(true);
+        return;
+    }
     if (selected < 0 || selected >= entry_count || !stationConfigured()) {
         return;
     }
@@ -572,6 +759,59 @@ void haltNow()
     showNotice("Halted");
 }
 
+void setTxHz(int hz)
+{
+    settings.tx_hz = constrain(hz, 300, 2800);
+    engine::applySettings();
+}
+
+void startTxTuning()
+{
+    tx_tuning = true;
+    tx_hz_before = settings.tx_hz;
+}
+
+void endTxTuning(bool keep)
+{
+    if (!tx_tuning) {
+        return;
+    }
+    tx_tuning = false;
+    if (keep) {
+        settings.save();
+    } else {
+        setTxHz(tx_hz_before);
+    }
+}
+
+void freeSpot()
+{
+    int hz = findFreeSpot(signalWidthHz(engine::mode()));
+    if (hz < 0) {
+        showNotice("Listening first - try again in a few seconds");
+        return;
+    }
+    setTxHz(hz);
+    if (!tx_tuning) {
+        settings.save();
+    }
+    char text[56];
+    snprintf(text, sizeof(text), "TX %d Hz - the quietest spot", hz);
+    showNotice(text);
+}
+
+void toggleSlot()
+{
+    int parity = engine::toggleTxParity();
+    if (parity < 0) {
+        showNotice("In a QSO the slot follows the other station");
+        return;
+    }
+    char text[56];
+    snprintf(text, sizeof(text), "TX in the %s slots", slotName(parity, false));
+    showNotice(text);
+}
+
 void toggleView()
 {
     view_by_hand = true;
@@ -580,7 +820,24 @@ void toggleView()
 
 void slotKey(char c)
 {
-    switch (tolower((unsigned char)c)) {
+    char k = (char)tolower((unsigned char)c);
+    if (tx_tuning) {
+        if (k == 0x08) {
+            endTxTuning(false);
+            return;
+        }
+        if (k == 'f') {
+            endTxTuning(true);
+            return;
+        }
+        if (k != 'g' && k != 'e' && k != '\n' && k != '\r') {
+            endTxTuning(true);  // any other key keeps the new frequency and does its job
+        }
+    }
+    switch (k) {
+    case 'f': startTxTuning(); break;
+    case 'g': freeSpot(); break;
+    case 'e': toggleSlot(); break;
     case 't': toggleTx(); break;
     case 'c': callCq(); break;
     case 'h': haltNow(); break;
@@ -1480,6 +1737,8 @@ Field fields[] = {
     {"FT8 / FT4", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"FT8/FT4 TX frequency", Kind::Number, nullptr, 0, Chars::Call, &settings.tx_hz, 300, 2800, 50, " Hz", nullptr, "", ""},
     {"FT8/FT4 max repeats", Kind::Number, nullptr, 0, Chars::Call, &settings.max_retries, 1, 20, 1, "", nullptr, "", ""},
+    {"Voice announcements", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.voice, "on", "off"},
+    {"Voice volume", Kind::Number, nullptr, 0, Chars::Call, &settings.voice_volume, 0, 100, 5, " %", nullptr, "", ""},
     {"CW", Kind::Header, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"CW sending speed", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_wpm, 5, 40, 1, " WPM", nullptr, "", ""},
     {"CW tone (RX window, TX)", Kind::Number, nullptr, 0, Chars::Call, &settings.cw_tone, 400, 1200, 10, " Hz", nullptr, "", ""},
@@ -1585,6 +1844,8 @@ const char kAboutText[] =
     "FT8 and FT4 - protocols by Joe Taylor K1JT and Steve Franke K9AN\n"
     "ft8_lib - Karlis Goba (MIT)\n"
     "11 m division list - from WSJT-CB, derived from WSJT-X (GPL 3)\n"
+    "Voice announcements - spoken by Piper (GPL 3) with the voice ljspeech, from the "
+    "LJ Speech dataset (public domain)\n"
     "LilyGoLib - Shenzhen Xinyuan Electronic Technology (MIT)\n"
     "LVGL - LVGL Kft (MIT)\n"
     "Montserrat typeface - The Montserrat Project Authors (SIL Open Font License 1.1)\n"
@@ -1765,12 +2026,14 @@ void buildHome()
     lv_obj_t *mark = lv_image_create(scr_home);
     lv_image_set_src(mark, &img_wordmark);
     lv_obj_set_pos(mark, 6, 3);
-    home_info = makeLabel(scr_home, 174, 10, 150, &lv_font_montserrat_12, kColDim);
-    home_time = makeLabel(scr_home, 326, 9, 72, &lv_font_montserrat_14, kColText);
-    home_gps = makeIcon(scr_home, 402, 9, &img_status_gps_no_fix);
-    home_wifi = makeIcon(scr_home, 421, 9, &img_status_wifi_on);
-    home_sd = makeIcon(scr_home, 440, 9, &img_status_sd_missing);
-    home_battery = makeIcon(scr_home, 459, 9, &img_status_battery_3);
+    home_info = makeLabel(scr_home, 174, 10, 136, &lv_font_montserrat_12, kColDim);
+    home_time = makeLabel(scr_home, 312, 9, 70, &lv_font_montserrat_14, kColText);
+    home_gps = makeIcon(scr_home, 386, 9, &img_status_gps_no_fix);
+    home_wifi = makeIcon(scr_home, 405, 9, &img_status_wifi_on);
+    home_sd = makeIcon(scr_home, 424, 9, &img_status_sd_missing);
+    // The charge as a number, as in the modes
+    home_battery = makeLabel(scr_home, 444, 10, 34, &lv_font_montserrat_12, kColText);
+    lv_obj_set_style_text_align(home_battery, LV_TEXT_ALIGN_RIGHT, 0);
 
     const int cols = 5, pitch_x = 94, pitch_y = 92;
     for (int i = 0; i < kTiles; ++i) {
@@ -1790,13 +2053,11 @@ void drawHome()
 {
     static uint32_t last_slow = 0;
     static bool card = false;
-    static int battery = 100;
     if (last_slow == 0 || millis() - last_slow > 3000) {
         last_slow = millis();
         card = instance.io.digitalRead(EXPANDS_SD_DET) == LOW;  // the card pulls the detect line low
-        instance.gauge.refresh();  // the readings are only fetched from the chip on request
-        battery = (int)instance.gauge.getStateOfCharge();
     }
+
 
     const int cols = 5, pitch_x = 94, pitch_y = 92;
     lv_obj_set_pos(tile_tint, 9 + (tile_selected % cols) * pitch_x, 38 + (tile_selected / cols) * pitch_y);
@@ -1806,8 +2067,7 @@ void drawHome()
     drawClockIcon(home_gps);
     lv_obj_set_style_image_recolor(home_wifi, web::running() ? kColCq : kColFrame, 0);
     setIcon(home_sd, card ? &img_status_sd_present : &img_status_sd_missing, card ? kColText : kColWarn);
-    const lv_image_dsc_t *const levels[4] = {&img_status_battery_0, &img_status_battery_1, &img_status_battery_2, &img_status_battery_3};
-    setIcon(home_battery, levels[constrain((battery + 16) / 33, 0, 3)], battery < 15 ? kColTx : kColText);
+    drawBattery(home_battery);
 
     if (noticeActive()) {
         lv_label_set_text(home_info, notice);
@@ -2707,6 +2967,9 @@ void fillActs()
         }
         addAct("H", haltNow, false, "Halt: stop, drop the contact");
         addAct("V", toggleView, true, "List shows: %s", list_view == ListView::Qso ? "the contact" : "everything heard");
+        addAct("F", startTxTuning, false, "TX frequency: %d Hz, set with the wheel", settings.tx_hz);
+        addAct("G", freeSpot, true, "TX frequency to the quietest spot");
+        addAct("E", toggleSlot, true, "TX slot: %s", slotName(engine::txParity(), false));
         break;
     case Mode::CW:
         if (st.transmitting) {
@@ -2976,8 +3239,14 @@ void pollInput()
     if (pressed) {
         switch (screen) {
         case Screen::Home: homePress(); break;
-        // In the modes the press opens their functions
+        // In the modes the press opens their functions; while tuning TX it ends that
         case Screen::Slot:
+            if (tx_tuning) {
+                endTxTuning(true);
+            } else {
+                openOverlay();
+            }
+            break;
         case Screen::Text:
         case Screen::Fax:
         case Screen::Sstv:
@@ -3054,6 +3323,13 @@ void pollInput()
 void selectMode(int mode)
 {
     openMode((Mode)constrain(mode, 0, engine::kModes - 1));
+}
+
+void printBattery()
+{
+    const Battery &b = readBattery();
+    Serial.printf("[bat] %d %% shown; gauge %d %%, curve %d %% at %d mV, %d mA%s\n", b.percent, b.gauge, b.curve, b.mv, b.ma,
+                  b.charging ? ", on USB" : "");
 }
 
 unsigned saveFaxNowForTest()

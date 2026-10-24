@@ -57,15 +57,28 @@ and keys the radio. No computer is involved.
 - **The own contact at a glance**: what is sent appears in the list with what
   is heard, and while calling or working a station the list shows just that
   contact (key V switches between it and everything heard)
+- **A free spot to transmit**: the spectrum of the last half minute shows
+  where the band is quiet; key G moves the TX frequency there, key F tunes it
+  with the wheel on the waterfall, and key E chooses the first or the second
+  slots for calling CQ
+- **Voice announcements** (optional): a new station calling CQ, a station
+  calling you, a QSO started and logged, spoken through the pager's speaker
 - **Band and frequency for the logbook**: the radio is tuned by hand, so key B
   in FT8 and FT4 opens the list of the usual frequencies per band (or takes a
   typed one). FT8, FT4 and CB operation each remember their own
-- **Exact time from GPS** with the pulse-per-second signal; the real-time clock
-  takes over without reception
+- **Exact time from GPS** with the pulse-per-second signal. Without reception
+  the phone page sets the clock from the phone's time, measured like NTP, and
+  the real-time clock keeps it in between
 - **Locator from GPS**, or entered by hand
 - **Phone page over Wi-Fi**: the pager opens its own access point and serves a
   page with the decodes, the main controls, received WEFAX pictures and the
-  logbook download
+  logbook download. In the logbook, key Q shows QR codes that join the Wi-Fi
+  and fetch the ADIF file
+- **Broadcast plans** of the German weather service DWD for WEFAX and RTTY: the
+  menu names the next broadcast and the plan counts down to it; the plans can
+  be edited on the phone page
+- **Battery** charge in the corner of the screen, from the fuel gauge checked
+  against the voltage curve of the cell
 - **Power saving**: the display goes off after three minutes without input, and
   the device goes to sleep when nothing is received either. Pressing the wheel
   wakes it. "Switch off" is in the setup
@@ -76,10 +89,13 @@ and keys the radio. No computer is involved.
 
 ## Connecting a radio
 
-Audio currently goes through the built-in microphone and speaker of the pager,
-so it works held next to the speaker of any receiver. A small add-on board with
-line-in, line-out and a PTT output for the 12-pin port is planned; the firmware
-already keeps audio and PTT behind interfaces for it.
+An interface board on the pager's 12-pin port carries its own audio codec
+with line in, line out and a PTT output for the radio. The firmware uses it
+whenever it is plugged in (Setup, "Audio"); receive and transmit levels are set
+in the setup and with the trimmers on the board.
+
+Without the board, audio goes through the built-in microphone and speaker of
+the pager, so reception works held next to the speaker of any receiver.
 
 ## Status
 
@@ -90,15 +106,22 @@ Work in progress.
   decoded in about 0.7 s.
 - NAVTEX and SSTV have only been tested against generated signals; WEFAX has
   received real weather charts.
-- Transmitting has not been tested on air yet.
+- Transmitting works through the interface board: PTT keys the radio and FT8
+  calls have gone out on the air.
 
 ## Installing
 
 DIGIWAVE is installed as one application next to others (for example Meshtastic)
 with the [Launcher](https://github.com/bmorcelli/Launcher) by bmorcelli: build
 the firmware, copy `.pio/build/pager/firmware.bin` to the SD card and install it
-from the Launcher. `partitions.csv` describes the layout for a merged image if
-the pager should run DIGIWAVE alone.
+from the Launcher. An update can also be written over USB straight into the
+Launcher slot of DIGIWAVE, at the offset its partition table gives it:
+
+    esptool.py write_flash 0x870000 .pio/build/pager/firmware.bin
+
+Do not use `pio run -t upload` on a pager with the Launcher: it writes
+`partitions.csv`, the layout for running DIGIWAVE alone, together with its own
+bootloader, and so removes the Launcher and the other applications.
 
 ## Building
 
@@ -107,7 +130,9 @@ PlatformIO with the pioarduino platform (Arduino-ESP32 3.3):
     pio run -e pager        # firmware
     pio test -e native      # host tests of the signal processing
 
-Artwork in `DIGIWAVE_Firmware_Grafiken` is converted with `python3 tools/make_assets.py`.
+Artwork in `DIGIWAVE_Firmware_Grafiken` is converted with `python3 tools/make_assets.py`,
+the voice announcements are spoken by [Piper](https://github.com/OHF-Voice/piper1-gpl)
+with `tools/make_voice.py` (setup in the script).
 
 ## Operating
 
@@ -154,6 +179,8 @@ It stands on the work of others:
   Kārlis Goba (MIT)
 - **CB operation** follows [WSJT-CB](https://github.com/vash909/WSJT-CB), from
   which the list of 11 m divisions is taken (GPL-3.0)
+- **The voice announcements** are spoken by Piper (GPL-3.0) with the voice
+  ljspeech, trained on the public-domain LJ Speech dataset
 - **The device** is driven through [LilyGoLib](https://github.com/Xinyuan-LilyGO/LilyGoLib)
   (MIT), the display through [LVGL](https://github.com/lvgl/lvgl) (MIT) with
   the Montserrat typeface (SIL Open Font License)
