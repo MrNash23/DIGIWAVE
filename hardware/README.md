@@ -147,8 +147,18 @@ The firmware side is in `src/hal/audio_es8311.cpp` (codec and data line) and
 
 ## Licence
 
-Copyright (C) 2026 Andres Leroi. The hardware design is published under the same
-licence as the rest of the repository, the GNU General Public License,
-version 3 or later. The footprints and 3D models of the KiCad libraries are
-used under their licence (CC-BY-SA 4.0 with an exception that leaves designs
-made with them free).
+Copyright (C) 2026 Andres Leroi.
+
+The hardware in this directory, the interface board and the case, is licensed
+under the CERN Open Hardware Licence Version 2 - Strongly Reciprocal
+(CERN-OHL-S-2.0), text in [`LICENSE`](LICENSE). It may be used, studied,
+changed, built and sold; whoever passes on the design or a product made from
+it has to make the source of the design, with any changes, available under the
+same licence.
+
+Source location: https://github.com/MrNash23/DIGIWAVE/tree/main/hardware
+
+The firmware in the rest of the repository stays under the GNU General Public
+License, version 3 or later. The footprints and 3D models of the KiCad
+libraries are used under their licence (CC-BY-SA 4.0 with an exception that
+leaves designs made with them free).

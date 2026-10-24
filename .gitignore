@@ -17,3 +17,11 @@ wefax-testbilder/
 
 # Generated test audio
 testsignale/
+
+# KiCad: local settings, backups, caches; the jack's 3D model comes from the EasyEDA library
+*.kicad_prl
+*-backups/
+fp-info-cache
+\#auto_saved_files\#
+_autosave-*
+hardware/interface-board/lib/3d/

@@ -187,6 +187,10 @@ terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later
 version. It comes without any warranty. The text is in [`LICENSE`](LICENSE).
 
+The hardware in [`hardware`](hardware), interface board and case, is licensed
+under the CERN Open Hardware Licence Version 2 - Strongly Reciprocal
+(CERN-OHL-S-2.0), text in [`hardware/LICENSE`](hardware/LICENSE).
+
 It stands on the work of others:
 
 - **FT8 and FT4** are protocols by Joe Taylor K1JT and Steve Franke K9AN;

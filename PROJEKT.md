@@ -101,5 +101,7 @@ Datensatz); neu erzeugt werden sie mit `tools/make_voice.py`.
 ## Lizenz
 
 Copyright (C) 2026 Andres Leroi. DIGIWAVE steht unter der GNU General Public License, Version 3 oder später
-(`LICENSE`). Die verwendeten Bibliotheken und Daten mit Urhebern und Lizenzen
+(`LICENSE`). Die Hardware in `hardware` (Zusatzplatine als KiCad-Projekt und Gehäuse)
+steht unter der CERN Open Hardware Licence Version 2 - Strongly Reciprocal
+(`hardware/LICENSE`). Die verwendeten Bibliotheken und Daten mit Urhebern und Lizenzen
 stehen in `THIRD-PARTY-NOTICES.md` und am Gerät unter Setup, „About DIGIWAVE".

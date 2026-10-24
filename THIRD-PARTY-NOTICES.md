@@ -1,7 +1,8 @@
 # Third-party software and data
 
 DIGIWAVE itself, Copyright (C) 2026 Andres Leroi, is licensed under the GNU General Public License, version 3 or
-later (see `LICENSE`). It builds on the work listed here. The first table is
+later (see `LICENSE`); its hardware in `hardware` under the CERN Open Hardware Licence Version 2 - Strongly
+Reciprocal (see `hardware/LICENSE`). It builds on the work listed here. The first table is
 what this repository contains; the second is what the build fetches and links
 into the firmware. Whoever passes on a built firmware passes on these parts
 too and has to keep their notices.
