@@ -83,11 +83,11 @@ and keys the radio. No computer is involved.
   the device goes to sleep when nothing is received either. Pressing the wheel
   wakes it. "Switch off" is in the setup
 
-<p align="center">
-  <img src="docs/digiwave-menu.jpg" alt="DIGIWAVE menu on the device" width="640">
-</p>
-
 ## Hardware: connecting a radio
+
+<p align="center">
+  <img src="docs/hardware/pager-with-interface.jpg" alt="T-LoRa Pager running DIGIWAVE with the interface board in its case on the 12-pin port and the cable to the radio">
+</p>
 
 <table>
   <tr>
