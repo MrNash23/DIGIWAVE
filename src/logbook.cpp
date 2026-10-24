@@ -172,7 +172,7 @@ void addStationRow(const char *record, const char *call)
     addWorked(call, record);
 }
 
-/// Reads one file of records, one to a line as append() and CBScope write them.
+/// Reads one file of records, one to a line as append() writes them and the station file has them.
 void readFile(const char *path, bool station)
 {
     File f = SD.open(path, FILE_READ);

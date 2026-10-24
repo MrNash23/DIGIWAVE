@@ -2181,7 +2181,7 @@ lv_obj_t *log_title, *log_row[kLogRows], *log_hint;
 lv_obj_t *log_qr_box, *log_qr, *log_qr_text;
 int log_qr_page = 0;  // 0: hidden, 1: joining the Wi-Fi, 2: downloading the file
 int log_top = 0;
-bool log_all = false;  // with the QSOs of the station at home, which CBScope puts on the card
+bool log_all = false;  // with the QSOs of the station at home, which a logging program puts on the card
 
 void buildLog()
 {

@@ -33,7 +33,7 @@ char home_addr[16] = "";
 uint32_t join_ms = 0;      // last attempt to join
 bool rejoin = false;       // the home network was changed on the web page, join it in loop()
 
-// CBScope at home asks once a minute; the device stays awake while it does
+// A logging program at home asks now and then; the device stays awake meanwhile
 uint32_t sync_ms = 0;
 constexpr uint32_t kSyncAwakeMs = 3 * 60000;
 
@@ -129,7 +129,7 @@ Lines with # are notes; <code>Station:</code> and <code>Frequencies:</code> name
 <h2>Logbook</h2>
 <p><span id="qsos">0</span> QSOs &middot; <a href="/log.adi" download="digiwave.adi">Download ADIF file</a></p>
 <h2 id="home">Home network</h2>
-<p>Joined besides the access point, so that CBScope on a computer at home finds the pager as digiwave.local and takes over the logbook.</p>
+<p>Joined besides the access point, so that a logging program on a computer at home finds the pager as digiwave.local and takes over the logbook.</p>
 <p><b id="homestate"></b></p>
 <form onsubmit="saveHome(event)">
 <label>Network</label>
@@ -720,7 +720,7 @@ void handleLogInfo()
     server.send(200, "application/json", out);
 }
 
-/// The QSOs of the station, from CBScope, as they arrive in pieces.
+/// The QSOs of the station at home, from a logging program, as they arrive in pieces.
 void handleStationData()
 {
     HTTPRaw &raw = server.raw();

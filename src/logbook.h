@@ -8,13 +8,13 @@
 /// ADIF logbook on the SD card, with the most recent QSOs kept in memory for display.
 ///
 /// Besides its own file the device reads the QSOs of the station at home,
-/// which CBScope puts on the card: they mark stations as worked in the list
+/// which a logging program there puts on the card: they mark stations as worked in the list
 /// of decodes and can be shown together with the own QSOs, but they are not
 /// counted in the figures and never written back.
 namespace logbook {
 
 extern const char kPath[];         // file on the SD card
-extern const char kStationPath[];  // the QSOs of the station at home, from CBScope
+extern const char kStationPath[];  // the QSOs of the station at home, from a logging program
 
 struct Row {
     char date[9];   // YYYYMMDD
@@ -62,7 +62,7 @@ int total();
 int count();
 const Row &row(int index);
 
-/// QSOs of the station at home in the file from CBScope.
+/// QSOs of the station at home in its file.
 int stationTotal();
 
 /// The QSOs held in memory of both, this device and the station, oldest first.

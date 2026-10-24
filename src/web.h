@@ -19,7 +19,7 @@ bool running();
 /// Number of phones connected to the access point.
 int clients();
 
-/// Whether a phone is connected or CBScope asked for the logbook in the last
+/// Whether a phone is connected or a logging program asked for the logbook in the last
 /// minutes: the device does not go to sleep meanwhile.
 bool inUse();
 

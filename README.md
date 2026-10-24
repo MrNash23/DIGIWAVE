@@ -78,9 +78,13 @@ and keys the radio. No computer is involved.
   Home Wi-Fi shows a code that joins the pager and one that opens a page
   listing the networks in reach, where the password is pasted. The pager then
   joins that network besides its own access point whenever its Wi-Fi is on,
-  and answers there as `digiwave.local`. CBScope on a computer at home then
-  takes the logbook over by itself (`/api/log` tells the size of the file,
-  `/log.adi` serves it). With Wi-Fi off, the home network is left alone too
+  and answers there as `digiwave.local`, so a logging program at home can take
+  the logbook over and send its own QSOs back (see
+  [Logbook over the home network](#logbook-over-the-home-network)). With Wi-Fi
+  off, the home network is left alone too
+- **Worked from home**: QSOs a logging program puts on the card mark those
+  stations as worked in the list of decodes, and key A in the logbook shows them
+  together with the own QSOs, with their distance
 - **Broadcast plans** of the German weather service DWD for WEFAX and RTTY: the
   menu names the next broadcast and the plan counts down to it; the plans can
   be edited on the phone page
@@ -175,6 +179,53 @@ can be saved as a whole at any time, and is saved by itself when the station's
 stop tone ends it. Saved pictures can be looked at on the pager
 (WEFAX functions, "Saved pictures") and are shown, downloaded and deleted on
 the phone page.
+
+## Logbook over the home network
+
+With a home network set up (Setup > Home Wi-Fi) and Wi-Fi on, the pager answers
+at `http://digiwave.local`. A logging program on a computer in that network can
+use three requests to keep its log and the pager's in step, in both directions:
+
+| Request | |
+| --- | --- |
+| `GET /api/log` | `{"device":"DIGIWAVE", "call":"...", "qsos":12, "size":975, "station":14759, "stationqsos":92}`: QSOs and size in bytes of the pager's logbook, size of the station file and the QSOs in it; a size is `-1` while there is no such file |
+| `GET /log.adi` | the pager's logbook as ADIF |
+| `POST /api/station` | replaces the station file with the body (`Content-Type: text/plain`), which is written to the card as it arrives; answers `200` once it is in place |
+
+**Taking the logbook over.** The pager only ever appends to its logbook and
+never deletes from it, so it is enough to ask `/api/log` now and then and to
+fetch `/log.adi` when `size` changed. Records may come again: match them on
+your side, by call, date, time, band and mode. The file starts with a header
+naming `DIGIWAVE` as `programid`, and every record carries `station_callsign`
+and `my_gridsquare` of where it was worked, which is useful for portable
+operation.
+
+**Sending QSOs to the pager.** QSOs made elsewhere, at the home station for
+instance, go into the station file. The pager marks these stations as worked in
+the list of decodes and for the voice announcements, lists them in grey in the
+logbook (key A) with their distance, leaves them out of the figures and never
+returns them in `/log.adi`. The file is ADIF with these rules:
+
+- one record to a line, ending in `<eor>`, lines up to 400 bytes
+- oldest first: the pager keeps the newest 200 for its list
+- fields read: `call` and `band` (for marking as worked), `gridsquare` and
+  `my_gridsquare` (for the distance), `qso_date`, `time_on`, `mode`,
+  `submode`, `rst_sent`, `rst_rcvd`
+- at most 6000 records together with the pager's own logbook; the file is read
+  at every start, so keep it smaller where you can. With more QSOs than that,
+  send the newest of every call and band first
+- send it only when it changed: compare `station` in `/api/log` with the size
+  of what you sent last, which also catches another card in the pager
+
+**Staying awake.** Each `/api/log` or `/log.adi` keeps the pager from going to
+sleep for three minutes, so asking once a minute keeps it on while it is at
+home. The display still goes off.
+
+**Name and safety.** The pager announces its name over mDNS with an IPv4
+address only. Resolve `digiwave.local` for IPv4: a lookup for any address
+family can wait several seconds for an IPv6 answer that never comes (macOS
+waits five). The interface has no password; everything in the home network can
+reach it, the phone page with its transmit controls included.
 
 ## Layout of the repository
 
