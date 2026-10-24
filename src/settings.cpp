@@ -44,6 +44,8 @@ void Settings::load()
     voice = p.getBool("voice", voice);
     voice_volume = p.getInt("voicevol", voice_volume);
     p.getString("wifipw", wifi_pass, sizeof(wifi_pass));
+    p.getString("homessid", home_ssid, sizeof(home_ssid));
+    p.getString("homepw", home_pass, sizeof(home_pass));
     cw_wpm = p.getInt("cwwpm", cw_wpm);
     cw_tone = p.getInt("cwtone", cw_tone);
     cw_tracking = p.getBool("cwtrack", cw_tracking);
@@ -92,6 +94,8 @@ void Settings::save() const
     p.putBool("voice", voice);
     p.putInt("voicevol", voice_volume);
     p.putString("wifipw", wifi_pass);
+    p.putString("homessid", home_ssid);
+    p.putString("homepw", home_pass);
     p.putInt("cwwpm", cw_wpm);
     p.putInt("cwtone", cw_tone);
     p.putBool("cwtrack", cw_tracking);

@@ -1707,7 +1707,7 @@ void pollPower(const engine::Status &st, bool received)
 enum class Kind { Text, Number, Toggle, Action, Header };  // Header: a section title, not selectable
 
 bool audio_board_at_start = false;  // the setting the audio path was chosen with
-enum class Chars { Call, Digits, Any };
+enum class Chars { Call, Digits, Any, Spaced };  // Spaced: Any and the space, for network names
 
 struct Field {
     const char *name;
@@ -1749,6 +1749,8 @@ Field fields[] = {
     {"Clock offset", Kind::Number, nullptr, 0, Chars::Call, &settings.time_offset_ds, -75, 75, 1, " x0.1 s", nullptr, "", ""},
     {"Wi-Fi access point", Kind::Toggle, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", &settings.wifi_on, "on", "off"},
     {"Wi-Fi password", Kind::Text, settings.wifi_pass, sizeof(settings.wifi_pass), Chars::Any, nullptr, 0, 0, 0, "", nullptr, "", ""},
+    {"Home Wi-Fi network", Kind::Text, settings.home_ssid, sizeof(settings.home_ssid), Chars::Spaced, nullptr, 0, 0, 0, "", nullptr, "", ""},
+    {"Home Wi-Fi password", Kind::Text, settings.home_pass, sizeof(settings.home_pass), Chars::Spaced, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Sleep when idle after", Kind::Number, nullptr, 0, Chars::Call, &settings.sleep_min, 0, 30, 1, " min (0 = never)", nullptr, "", ""},
     {"About DIGIWAVE", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
     {"Switch off", Kind::Action, nullptr, 0, Chars::Call, nullptr, 0, 0, 0, "", nullptr, "", ""},
@@ -1994,6 +1996,9 @@ void setupKey(char c)
         case Chars::Any:
             ok = isgraph((unsigned char)c);
             break;
+        case Chars::Spaced:
+            ok = isprint((unsigned char)c);
+            break;
         }
         size_t n = strlen(f.text);
         if (ok && n + 1 < f.text_size) {
@@ -2072,7 +2077,11 @@ void drawHome()
     if (noticeActive()) {
         lv_label_set_text(home_info, notice);
     } else if (web::running()) {
-        lv_label_set_text_fmt(home_info, "%s  %s", settings.wifi_pass, web::address() + 7);
+        if (web::homeAddress()[0] != '\0') {
+            lv_label_set_text_fmt(home_info, "%s  %s  home %s", settings.wifi_pass, web::address() + 7, web::homeAddress());
+        } else {
+            lv_label_set_text_fmt(home_info, "%s  %s", settings.wifi_pass, web::address() + 7);
+        }
     } else if (settings.call[0] == '\0') {
         lv_label_set_text(home_info, "Enter callsign in Setup");
     } else {

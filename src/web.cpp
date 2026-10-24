@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Andres Leroi
 #include "web.h"
 
+#include <ESPmDNS.h>
 #include <LilyGoLib.h>
 #include <SD.h>
 #include <WebServer.h>
@@ -26,6 +27,14 @@ namespace {
 WebServer server(80);
 bool active = false;
 char addr[32] = "";
+
+// Home network: joined besides the access point when settings.home_ssid is set
+char home_addr[16] = "";
+uint32_t join_ms = 0;      // last attempt to join
+uint32_t restart_ms = 0;   // when to restart Wi-Fi after a change from the web page, 0 = not pending
+// A failed attempt scans all channels and takes a phone on the access point
+// with it, so it is only repeated while no phone is connected
+constexpr uint32_t kRejoinMs = 60000;
 
 const char kPage[] PROGMEM = R"HTML(<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -109,6 +118,13 @@ Lines with # are notes; <code>Station:</code> and <code>Frequencies:</code> name
 </form>
 <h2>Logbook</h2>
 <p><span id="qsos">0</span> QSOs &middot; <a href="/log.adi" download="digiwave.adi">Download ADIF file</a></p>
+<h2>Home network</h2>
+<p>Joined besides the access point, so that CBScope on a computer at home finds the pager as digiwave.local and takes over the logbook. <span id="homeaddr"></span></p>
+<form onsubmit="saveHome(event)">
+<div class="row"><div><label>Network name</label><input type="text" id="homessid" maxlength="32"></div>
+<div><label>Password</label><input type="text" id="homepass" maxlength="63" placeholder="unchanged"></div></div>
+<div class="btns"><button type="submit">Save</button></div>
+</form>
 </main>
 <script>
 let S={},filled=false;
@@ -153,6 +169,7 @@ async function loadSched(){try{const r=await fetch('/api/schedule?p='+schedPlan)
 function saveSched(){post('/api/schedule',{p:schedPlan,text:$('sched').value}).then(loadSched)}
 function save(e){e.preventDefault();post('/api/settings',{call:$('call').value,grid:$('grid').value,
   gridauto:$('gridauto').checked?1:0,dial:$('dial').value,txhz:$('txhz').value})}
+function saveHome(e){e.preventDefault();post('/api/home',{ssid:$('homessid').value,pass:$('homepass').value});$('homepass').value=''}
 function answer(h){if(confirm('Call '+h.de+'?'))post('/api/answer',{slot:h.slot,f:h.f})}
 function render(){
   const ms=$('modes');
@@ -175,8 +192,9 @@ function render(){
   document.querySelector('#bar div').style.width=S.slot+'%';
   const b=$('btx');b.textContent=S.txen?'TX ON':'TX off';b.className=S.txen?'on':'';
   $('qsos').textContent=S.qsos;
+  $('homeaddr').textContent=S.home?'Joined, address '+S.home+'.':(S.homessid?'Not joined.':'');
   if(!filled){filled=true;$('call').value=S.call;$('grid').value=S.grid;$('gridauto').checked=S.gridauto;
-    $('dial').value=S.dial;$('txhz').value=S.txhz}
+    $('dial').value=S.dial;$('txhz').value=S.txhz;$('homessid').value=S.homessid}
   const tb=$('list');tb.textContent='';
   for(const h of S.hist.slice().reverse()){
     const tr=document.createElement('tr');tr.className=h.own?'own':(h.me?'me':(h.w?'w'+h.w:(h.cq?'cq':'')));
@@ -267,6 +285,10 @@ void handleState()
     appendJsonString(out, settings.call);
     out += ",\"grid\":";
     appendJsonString(out, settings.grid);
+    out += ",\"homessid\":";
+    appendJsonString(out, settings.home_ssid);
+    out += ",\"home\":";
+    appendJsonString(out, home_addr);
     // The frequency of the mode in use, in kHz
     snprintf(buf, sizeof(buf), ",\"gridauto\":%s,\"dial\":%.1f,\"txhz\":%d,\"qsos\":%d,\"hist\":[",
              settings.grid_auto ? "true" : "false", settings.dialHz((int)engine::mode()) / 1000.0, settings.tx_hz,
@@ -433,6 +455,27 @@ void handleSettings()
     server.send(200, "text/plain", "Saved");
 }
 
+void handleHome()
+{
+    String ssid = server.arg("ssid");
+    String pass = server.arg("pass");
+    ssid.trim();
+    // An empty password keeps the one stored for the same network
+    if (pass.length() > 0 || ssid != settings.home_ssid) {
+        strncpy(settings.home_pass, pass.c_str(), sizeof(settings.home_pass) - 1);
+        settings.home_pass[sizeof(settings.home_pass) - 1] = '\0';
+    }
+    strncpy(settings.home_ssid, ssid.c_str(), sizeof(settings.home_ssid) - 1);
+    settings.home_ssid[sizeof(settings.home_ssid) - 1] = '\0';
+    settings.save();
+    server.send(200, "text/plain", ssid.length() ? "Saved - Wi-Fi restarts, reconnect the phone" : "Home network removed");
+    // Restarting here would cut off the answer
+    restart_ms = millis() + 1000;
+    if (restart_ms == 0) {
+        restart_ms = 1;
+    }
+}
+
 void handleMode()
 {
     int m = server.arg("m").toInt();
@@ -565,12 +608,41 @@ void handleLog()
     server.send(404, "text/plain", "No logbook on the SD card yet");
 }
 
+/// Size of the logbook file, so a computer polling for new QSOs fetches the file only when it grew.
+void handleLogInfo()
+{
+    instance.lockSPI();
+    long size = -1;
+    if (SD.cardType() != CARD_NONE && SD.exists(logbook::kPath)) {
+        File f = SD.open(logbook::kPath, FILE_READ);
+        if (f) {
+            size = (long)f.size();
+            f.close();
+        }
+    }
+    instance.unlockSPI();
+    String out = "{\"device\":\"DIGIWAVE\",\"call\":";
+    appendJsonString(out, settings.call);
+    char buf[48];
+    snprintf(buf, sizeof(buf), ",\"qsos\":%d,\"size\":%ld}", logbook::total(), size);
+    out += buf;
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", out);
+}
+
+void joinHome()
+{
+    WiFi.begin(settings.home_ssid, settings.home_pass);
+    join_ms = millis();
+}
+
 void start()
 {
     // The driver must not keep its settings in flash: the settings area is
     // shared with the other firmwares on the pager and may be full
     WiFi.persistent(false);
-    WiFi.mode(WIFI_AP);
+    bool home = settings.home_ssid[0] != '\0';
+    WiFi.mode(home ? WIFI_AP_STA : WIFI_AP);
     if (!WiFi.softAP(kSsid, password())) {
         Serial.println("[web] access point did not start");
         WiFi.mode(WIFI_OFF);
@@ -589,6 +661,8 @@ void start()
     server.on("/api/answer", HTTP_POST, handleAnswer);
     server.on("/api/settings", HTTP_POST, handleSettings);
     server.on("/log.adi", HTTP_GET, handleLog);
+    server.on("/api/log", HTTP_GET, handleLogInfo);
+    server.on("/api/home", HTTP_POST, handleHome);
     server.on("/api/schedule", HTTP_GET, handleScheduleGet);
     server.on("/api/schedule", HTTP_POST, handleSchedulePost);
     server.on("/api/mode", HTTP_POST, handleMode);
@@ -599,15 +673,26 @@ void start()
     server.begin();
     active = true;
     Serial.printf("[web] access point %s, %s\n", kSsid, addr);
+    if (home) {
+        // Rejoining is done in loop(), where it can wait for the phone to leave
+        WiFi.setAutoReconnect(false);
+        joinHome();
+    }
+    if (MDNS.begin("digiwave")) {
+        MDNS.addService("http", "tcp", 80);
+    }
 }
 
 void stop()
 {
+    MDNS.end();
     server.stop();
+    WiFi.disconnect(true);
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
     active = false;
     addr[0] = '\0';
+    home_addr[0] = '\0';
 }
 
 }  // namespace
@@ -627,8 +712,28 @@ void apply()
 
 void loop()
 {
-    if (active) {
-        server.handleClient();
+    if (!active) {
+        return;
+    }
+    server.handleClient();
+    if (restart_ms != 0 && (int32_t)(millis() - restart_ms) >= 0) {
+        restart_ms = 0;
+        apply();
+        return;
+    }
+    if (settings.home_ssid[0] == '\0') {
+        return;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        if (home_addr[0] == '\0') {
+            strncpy(home_addr, WiFi.localIP().toString().c_str(), sizeof(home_addr) - 1);
+            Serial.printf("[web] joined %s as %s\n", settings.home_ssid, home_addr);
+        }
+    } else {
+        home_addr[0] = '\0';
+        if (millis() - join_ms >= kRejoinMs && WiFi.softAPgetStationNum() == 0) {
+            joinHome();
+        }
     }
 }
 
@@ -652,6 +757,11 @@ void shutdown()
 const char *address()
 {
     return addr;
+}
+
+const char *homeAddress()
+{
+    return home_addr;
 }
 
 const char *password()

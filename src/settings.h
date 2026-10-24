@@ -47,6 +47,10 @@ struct Settings {
     bool voice = false;         // spoken announcements in FT8 and FT4
     int voice_volume = 100;     // percent
     char wifi_pass[20] = "digiwave";
+    // Network at home that the device joins besides its own access point, so
+    // a computer there reaches it as digiwave.local. Empty: none.
+    char home_ssid[33] = "";
+    char home_pass[64] = "";
 
     int cw_wpm = 20;            // sending speed
     int cw_tone = 700;          // sending tone in Hz

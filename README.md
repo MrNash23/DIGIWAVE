@@ -74,6 +74,11 @@ and keys the radio. No computer is involved.
   page with the decodes, the main controls, received WEFAX pictures and the
   logbook download. In the logbook, key Q shows QR codes that join the Wi-Fi
   and fetch the ADIF file
+- **Home network**: with a home Wi-Fi entered in Setup (or on the phone page),
+  the pager joins it besides its own access point whenever its Wi-Fi is on,
+  and answers there as `digiwave.local`. CBScope on a computer at home then
+  takes the logbook over by itself (`/api/log` tells the size of the file,
+  `/log.adi` serves it). With Wi-Fi off, the home network is left alone too
 - **Broadcast plans** of the German weather service DWD for WEFAX and RTTY: the
   menu names the next broadcast and the plan counts down to it; the plans can
   be edited on the phone page
