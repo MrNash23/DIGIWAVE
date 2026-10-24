@@ -28,6 +28,9 @@ const char *address();
 /// Password of the access point.
 const char *password();
 
+/// State of the access point and the home network on the serial line, for the command "w".
+void printDiagnostics();
+
 /// Address in the home network (such as "192.168.1.40"), or an empty string while not joined.
 const char *homeAddress();
 

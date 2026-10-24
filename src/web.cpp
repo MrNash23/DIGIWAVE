@@ -838,6 +838,15 @@ const char *address()
     return addr;
 }
 
+void printDiagnostics()
+{
+    Serial.printf("[web] %s, mode %d, access point %s channel %d, %d phone(s)\n", active ? "on" : "off", (int)WiFi.getMode(),
+                  WiFi.softAPIP().toString().c_str(), (int)WiFi.channel(), active ? WiFi.softAPgetStationNum() : 0);
+    Serial.printf("[web] home \"%s\": %s, status %d, address %s; internal free %u (lowest %u), largest block %u\n", settings.home_ssid,
+                  homeState(), (int)WiFi.status(), home_addr, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
 const char *homeAddress()
 {
     return home_addr;

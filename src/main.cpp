@@ -10,6 +10,7 @@
 #include "timebase.h"
 #include "ui.h"
 #include "voice.h"
+#include "web.h"
 
 // Drawing with LVGL needs more than the 8 kB the main task gets by default
 SET_LOOP_TASK_STACK_SIZE(24 * 1024);
@@ -124,6 +125,8 @@ void pollSerialCommands()
                 } else if (line[0] == 'r') {
                     engine::capture((size_t)constrain(atoi(line + 2), 1, 60) * 12000);
                     recording = true;
+                } else if (line[0] == 'w') {
+                    web::printDiagnostics();
                 } else if (line[0] == 'v') {
                     voice::say((voice::Phrase)constrain(atoi(line + 2), 0, 3));
                 } else if (line[0] == 's') {
