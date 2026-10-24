@@ -32,6 +32,15 @@ char addr[32] = "";
 char home_addr[16] = "";
 uint32_t join_ms = 0;      // last attempt to join
 bool rejoin = false;       // the home network was changed on the web page, join it in loop()
+
+// CBScope at home asks once a minute; the device stays awake while it does
+uint32_t sync_ms = 0;
+constexpr uint32_t kSyncAwakeMs = 3 * 60000;
+
+// Upload of the station's QSOs, written to a temporary file and put in place when complete
+const char kStationTmp[] = "/station.tmp";
+File station_file;
+bool station_ok = false;
 constexpr uint32_t kJoinMs = 20000;  // an attempt that has not joined by then has failed
 // A failed attempt scans all channels and takes a phone on the access point
 // with it, so it is only repeated while no phone is connected
@@ -677,26 +686,90 @@ void handleLog()
     server.send(404, "text/plain", "No logbook on the SD card yet");
 }
 
-/// Size of the logbook file, so a computer polling for new QSOs fetches the file only when it grew.
-void handleLogInfo()
+/// Size of a file on the card, -1 if there is none. The caller holds the SPI lock.
+long fileSize(const char *path)
 {
-    instance.lockSPI();
     long size = -1;
-    if (SD.cardType() != CARD_NONE && SD.exists(logbook::kPath)) {
-        File f = SD.open(logbook::kPath, FILE_READ);
+    if (SD.cardType() != CARD_NONE && SD.exists(path)) {
+        File f = SD.open(path, FILE_READ);
         if (f) {
             size = (long)f.size();
             f.close();
         }
     }
+    return size;
+}
+
+/// Sizes of the logbook and of the station's file, so a computer polling for
+/// new QSOs fetches the one only when it grew and sends the other only when
+/// the card does not hold what it sent last.
+void handleLogInfo()
+{
+    sync_ms = millis();
+    instance.lockSPI();
+    long size = fileSize(logbook::kPath);
+    long station = fileSize(logbook::kStationPath);
     instance.unlockSPI();
     String out = "{\"device\":\"DIGIWAVE\",\"call\":";
     appendJsonString(out, settings.call);
-    char buf[48];
-    snprintf(buf, sizeof(buf), ",\"qsos\":%d,\"size\":%ld}", logbook::total(), size);
+    char buf[96];
+    snprintf(buf, sizeof(buf), ",\"qsos\":%d,\"size\":%ld,\"station\":%ld,\"stationqsos\":%d}", logbook::total(), size, station,
+             logbook::stationTotal());
     out += buf;
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", out);
+}
+
+/// The QSOs of the station, from CBScope, as they arrive in pieces.
+void handleStationData()
+{
+    HTTPRaw &raw = server.raw();
+    instance.lockSPI();
+    switch (raw.status) {
+    case RAW_START:
+        station_ok = SD.cardType() != CARD_NONE;
+        if (station_ok) {
+            SD.remove(kStationTmp);
+            station_file = SD.open(kStationTmp, FILE_WRITE);
+            station_ok = (bool)station_file;
+        }
+        break;
+    case RAW_WRITE:
+        if (station_ok && station_file.write(raw.buf, raw.currentSize) != raw.currentSize) {
+            station_ok = false;
+        }
+        break;
+    case RAW_END:
+        if (station_file) {
+            station_file.close();
+        }
+        if (station_ok) {
+            SD.remove(logbook::kStationPath);
+            station_ok = SD.rename(kStationTmp, logbook::kStationPath);
+        }
+        break;
+    case RAW_ABORTED:
+        if (station_file) {
+            station_file.close();
+        }
+        SD.remove(kStationTmp);
+        station_ok = false;
+        break;
+    }
+    instance.unlockSPI();
+}
+
+void handleStationDone()
+{
+    sync_ms = millis();
+    if (!station_ok) {
+        server.send(500, "text/plain", "Could not write the station's QSOs to the SD card");
+        return;
+    }
+    logbook::load();
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%d station QSOs", logbook::stationTotal());
+    server.send(200, "text/plain", buf);
 }
 
 void joinHome()
@@ -729,7 +802,11 @@ void start()
     server.on("/api/cmd", HTTP_POST, handleCmd);
     server.on("/api/answer", HTTP_POST, handleAnswer);
     server.on("/api/settings", HTTP_POST, handleSettings);
-    server.on("/log.adi", HTTP_GET, handleLog);
+    server.on("/log.adi", HTTP_GET, []() {
+        sync_ms = millis();
+        handleLog();
+    });
+    server.on("/api/station", HTTP_POST, handleStationDone, handleStationData);
     server.on("/api/log", HTTP_GET, handleLogInfo);
     server.on("/api/home", HTTP_POST, handleHome);
     server.on("/api/scan", HTTP_GET, handleScan);
@@ -824,6 +901,11 @@ bool running()
 int clients()
 {
     return active ? WiFi.softAPgetStationNum() : 0;
+}
+
+bool inUse()
+{
+    return clients() > 0 || (active && sync_ms != 0 && millis() - sync_ms < kSyncAwakeMs);
 }
 
 void shutdown()

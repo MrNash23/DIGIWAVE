@@ -1684,7 +1684,7 @@ void pollPower(const engine::Status &st, bool received)
     // device, and a picture arriving is not "received" in the sense of a
     // decode: these modes keep the device awake, only the display goes off.
     bool listening = st.mode == Mode::WEFAX || st.mode == Mode::NAVTEX || st.mode == Mode::SSTV;
-    bool busy = received || listening || st.transmitting || web::clients() > 0 ||
+    bool busy = received || listening || st.transmitting || web::inUse() ||
                 (engine::isSlotMode(st.mode) && strcmp(st.qso_state, "Idle") != 0);
     if (busy) {
         last_busy = now;
@@ -2181,6 +2181,7 @@ lv_obj_t *log_title, *log_row[kLogRows], *log_hint;
 lv_obj_t *log_qr_box, *log_qr, *log_qr_text;
 int log_qr_page = 0;  // 0: hidden, 1: joining the Wi-Fi, 2: downloading the file
 int log_top = 0;
+bool log_all = false;  // with the QSOs of the station at home, which CBScope puts on the card
 
 void buildLog()
 {
@@ -2376,6 +2377,11 @@ void logKey(char c)
         drawLogQr();
         setLogWifi(!web::running());
         break;
+    case 'a':
+    case 'A':
+        log_all = !log_all;
+        log_top = 0;
+        break;
     case 'q':
     case 'Q':
         if (log_qr_page == 0 && !web::running()) {
@@ -2437,10 +2443,10 @@ void drawLogStats()
 void drawLogHint()
 {
     if (web::running()) {
-        lv_label_set_text_fmt(log_hint, "Q: QR code  W: Wi-Fi off  Backspace: back  |  download: %s/log.adi", web::address() + 7);
+        lv_label_set_text_fmt(log_hint, "A: with station  Q: QR code  W: Wi-Fi off  Backspace: back  |  %s/log.adi", web::address() + 7);
         lv_obj_set_style_text_color(log_hint, kColCq, 0);
     } else {
-        lv_label_set_text(log_hint, "wheel: scroll  press: figures  W: Wi-Fi download  Q: QR code  Backspace: back");
+        lv_label_set_text(log_hint, "wheel: scroll  press: figures  A: with station  W: Wi-Fi  Q: QR code  Backspace: back");
         lv_obj_set_style_text_color(log_hint, kColDim, 0);
     }
 }
@@ -2452,10 +2458,13 @@ void drawLog()
         drawLogStats();
         return;
     }
-    int count = logbook::count();
+    int count = log_all ? logbook::countAll() : logbook::count();
     log_top = constrain(log_top, 0, max(0, count - kLogRows));
     if (count == 0) {
-        lv_label_set_text(log_title, "Logbook  -  no QSOs yet");
+        lv_label_set_text(log_title, log_all ? "Logbook with station  -  no QSOs yet" : "Logbook  -  no QSOs yet      A: with station");
+    } else if (log_all) {
+        lv_label_set_text_fmt(log_title, "With station  -  %d here, %d at home (grey)      A: this device", logbook::total(),
+                              logbook::stationTotal());
     } else {
         lv_label_set_text_fmt(log_title, "Logbook  -  %d QSOs, newest first      press: figures", logbook::total());
     }
@@ -2465,7 +2474,8 @@ void drawLog()
             lv_label_set_text(log_row[i], "");
             continue;
         }
-        const logbook::Row &r = logbook::row(idx);
+        const logbook::Row &r = log_all ? logbook::rowAll(idx) : logbook::row(idx);
+        lv_obj_set_style_text_color(log_row[i], r.station ? kColDim : kColText, 0);
         char km[12] = "";
         if (r.km >= 0) {
             snprintf(km, sizeof(km), "  %dkm", r.km);

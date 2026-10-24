@@ -14,12 +14,22 @@
 namespace logbook {
 
 const char kPath[] = "/digiwave.adi";
+const char kStationPath[] = "/station.adi";
 
 namespace {
 
 Row *rows = nullptr;
 int row_count = 0;
 int total_count = 0;
+
+Row *station_rows = nullptr;
+int station_row_count = 0;
+int station_count = 0;
+
+// Both lists merged by time, built when first asked for after a change
+const Row **merged = nullptr;
+int merged_count = 0;
+bool merged_dirty = true;
 
 // Every station in the file with the band it was worked on, for marking it
 // in the list of decodes. Kept for the whole file, not only for the rows shown.
@@ -30,6 +40,19 @@ struct Worked {
 constexpr int kMaxWorked = 6000;
 Worked *worked_list = nullptr;
 int worked_count = 0;
+
+void addWorked(const char *call, const char *record)
+{
+    if (worked_list == nullptr) {
+        worked_list = (Worked *)ps_calloc(kMaxWorked, sizeof(Worked));
+    }
+    if (worked_list != nullptr && worked_count < kMaxWorked) {
+        Worked &w = worked_list[worked_count++];
+        strncpy(w.call, call, sizeof(w.call) - 1);
+        w.call[sizeof(w.call) - 1] = '\0';
+        ft8::adifField(record, "band", w.band, sizeof(w.band));
+    }
+}
 
 Stats st{};
 char st_today[9] = "";
@@ -71,15 +94,7 @@ void tally(const char *record)
     }
     char call[14];
     if (ft8::adifField(record, "call", call, sizeof(call))) {
-        if (worked_list == nullptr) {
-            worked_list = (Worked *)ps_calloc(kMaxWorked, sizeof(Worked));
-        }
-        if (worked_list != nullptr && worked_count < kMaxWorked) {
-            Worked &w = worked_list[worked_count++];
-            strncpy(w.call, call, sizeof(w.call) - 1);
-            w.call[sizeof(w.call) - 1] = '\0';
-            ft8::adifField(record, "band", w.band, sizeof(w.band));
-        }
+        addWorked(call, record);
         const char *country = ft8::isCbCallsign(call) ? ft8::cbCountryForCall(call) : ft8::countryForCall(call);
         if (seen_countries == nullptr) {
             seen_countries = (const char **)ps_calloc(kMaxCountries, sizeof(char *));
@@ -107,19 +122,20 @@ void tally(const char *record)
     }
 }
 
-void addRow(const char *record)
+/// Takes a record into a list that keeps the newest kMaxRows. Returns the row, nullptr without memory.
+Row *keepRow(Row *&list, int &n, const char *record)
 {
-    if (rows == nullptr) {
-        rows = (Row *)ps_calloc(kMaxRows, sizeof(Row));
-        if (rows == nullptr) {
-            return;
+    if (list == nullptr) {
+        list = (Row *)ps_calloc(kMaxRows, sizeof(Row));
+        if (list == nullptr) {
+            return nullptr;
         }
     }
-    if (row_count == kMaxRows) {
-        memmove(rows, rows + 1, sizeof(Row) * (kMaxRows - 1));
-        --row_count;
+    if (n == kMaxRows) {
+        memmove(list, list + 1, sizeof(Row) * (kMaxRows - 1));
+        --n;
     }
-    Row &r = rows[row_count++];
+    Row &r = list[n++];
     ft8::adifField(record, "qso_date", r.date, sizeof(r.date));
     ft8::adifField(record, "time_on", r.time, sizeof(r.time));
     ft8::adifField(record, "call", r.call, sizeof(r.call));
@@ -134,8 +150,72 @@ void addRow(const char *record)
     if (!ft8::adifField(record, "submode", r.mode, sizeof(r.mode))) {
         ft8::adifField(record, "mode", r.mode, sizeof(r.mode));
     }
+    r.station = false;
+    merged_dirty = true;
+    return &r;
+}
+
+void addRow(const char *record)
+{
+    keepRow(rows, row_count, record);
     ++total_count;
     tally(record);
+}
+
+void addStationRow(const char *record, const char *call)
+{
+    Row *r = keepRow(station_rows, station_row_count, record);
+    if (r != nullptr) {
+        r->station = true;
+    }
+    ++station_count;
+    addWorked(call, record);
+}
+
+/// Reads one file of records, one to a line as append() and CBScope write them.
+void readFile(const char *path, bool station)
+{
+    File f = SD.open(path, FILE_READ);
+    if (!f) {
+        return;
+    }
+    static char line[400];
+    while (f.available()) {
+        size_t n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+        line[n] = '\0';
+        char call[14];
+        if (ft8::adifField(line, "call", call, sizeof(call))) {
+            if (station) {
+                addStationRow(line, call);
+            } else {
+                addRow(line);
+            }
+        }
+    }
+    f.close();
+}
+
+bool before(const Row *a, const Row *b)
+{
+    int d = strcmp(a->date, b->date);
+    return d < 0 || (d == 0 && strcmp(a->time, b->time) < 0);
+}
+
+void buildMerged()
+{
+    merged_dirty = false;
+    merged_count = 0;
+    if (merged == nullptr) {
+        merged = (const Row **)ps_calloc(2 * kMaxRows, sizeof(Row *));
+        if (merged == nullptr) {
+            return;
+        }
+    }
+    int a = 0, b = 0;
+    while (a < row_count || b < station_row_count) {
+        bool take_own = b == station_row_count || (a < row_count && !before(&station_rows[b], &rows[a]));
+        merged[merged_count++] = take_own ? &rows[a++] : &station_rows[b++];
+    }
 }
 
 }  // namespace
@@ -144,26 +224,17 @@ bool load()
 {
     row_count = 0;
     total_count = 0;
+    station_row_count = 0;
+    station_count = 0;
+    merged_dirty = true;
     worked_count = 0;
     st = Stats{};
     // The card shares the SPI bus with the display
     instance.lockSPI();
     bool ok = SD.cardType() != CARD_NONE;
     if (ok) {
-        File f = SD.open(kPath, FILE_READ);
-        if (f) {
-            // One record per line, as append() writes them
-            static char line[400];
-            while (f.available()) {
-                size_t n = f.readBytesUntil('\n', line, sizeof(line) - 1);
-                line[n] = '\0';
-                char call[14];
-                if (ft8::adifField(line, "call", call, sizeof(call))) {
-                    addRow(line);
-                }
-            }
-            f.close();
-        }
+        readFile(kPath, false);
+        readFile(kStationPath, true);
     }
     instance.unlockSPI();
     return ok;
@@ -204,6 +275,27 @@ int total()
 int count()
 {
     return row_count;
+}
+
+int stationTotal()
+{
+    return station_count;
+}
+
+int countAll()
+{
+    if (merged_dirty) {
+        buildMerged();
+    }
+    return merged_count;
+}
+
+const Row &rowAll(int index)
+{
+    if (merged_dirty) {
+        buildMerged();
+    }
+    return *merged[index];
 }
 
 const Row &row(int index)

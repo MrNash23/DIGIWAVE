@@ -6,9 +6,15 @@
 #include <ft8_qso.h>
 
 /// ADIF logbook on the SD card, with the most recent QSOs kept in memory for display.
+///
+/// Besides its own file the device reads the QSOs of the station at home,
+/// which CBScope puts on the card: they mark stations as worked in the list
+/// of decodes and can be shown together with the own QSOs, but they are not
+/// counted in the figures and never written back.
 namespace logbook {
 
-extern const char kPath[];  // file on the SD card
+extern const char kPath[];         // file on the SD card
+extern const char kStationPath[];  // the QSOs of the station at home, from CBScope
 
 struct Row {
     char date[9];   // YYYYMMDD
@@ -20,6 +26,7 @@ struct Row {
     char band[6];
     char mode[6];
     int km;         // distance to the station, -1 if a locator is missing
+    bool station;   // from the station at home, not worked with this device
 };
 
 /// Figures over all QSOs in the file.
@@ -54,6 +61,13 @@ int total();
 /// QSOs held in memory, oldest first.
 int count();
 const Row &row(int index);
+
+/// QSOs of the station at home in the file from CBScope.
+int stationTotal();
+
+/// The QSOs held in memory of both, this device and the station, oldest first.
+int countAll();
+const Row &rowAll(int index);
 
 /// Whether a station is in the logbook of this device: 0 no, 1 on another
 /// band only, 2 on the given band (ADIF name such as "20m").
