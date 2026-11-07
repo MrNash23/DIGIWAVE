@@ -6,7 +6,8 @@
 
 <p align="center">
   Firmware for the <a href="https://lilygo.cc/products/t-lora-pager">LilyGo T-LoRa Pager</a>:
-  FT8, FT4, CW, RTTY, NAVTEX, WEFAX and SSTV on a device that fits in a jacket pocket.
+  FT8, FT4, CW, RTTY, NAVTEX, WEFAX and SSTV on a device that fits in a jacket pocket,
+  and a scanner that tells them apart.
 </p>
 
 <p align="center">
@@ -28,6 +29,7 @@ and keys the radio. No computer is involved.
     <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_navtex_64x64.png" width="64"><br><b>NAVTEX</b></td>
     <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_wefax_64x64.png" width="64"><br><b>WEFAX</b></td>
     <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_sstv_64x64.png" width="64"><br><b>SSTV</b></td>
+    <td align="center"><img src="DIGIWAVE_Firmware_Grafiken/tile_scan_64x64.png" width="64"><br><b>SCAN</b></td>
   </tr>
 </table>
 
@@ -39,9 +41,15 @@ and keys the radio. No computer is involved.
 | NAVTEX | yes | - |
 | WEFAX (120 LPM) | yes, saved as BMP on the SD card | - |
 | SSTV (Martin 1/2, Scottie 1/2, Robot 36, PD 120/180) | yes, in colour, saved as BMP on the SD card | - |
+| Mode scanner (experimental) | names the mode of a signal: FT8, FT4, CW, RTTY, NAVTEX, PSK31/63, SSTV, WEFAX | - |
 
 ### Features
 
+- **Mode scanner** (experimental): the SCAN tile listens to the strongest
+  signal, or to the one picked with the wheel, and names its mode from its
+  width, tones, symbol rate and length of transmission, with the measured
+  shift, baud rate or speed. Enter opens the mode that decodes it and takes the
+  tones over, for instance mark, shift and speed of an RTTY station
 - **Waterfall** under the decodes in FT8, FT4, CW, RTTY and NAVTEX
 - **Full FT8/FT4 contacts**: call CQ or answer a station with one press; the
   sequence runs by itself and the contact is written to an ADIF logbook on the SD card
@@ -70,7 +78,7 @@ and keys the radio. No computer is involved.
   the phone page sets the clock from the phone's time, measured like NTP, and
   the real-time clock keeps it in between
 - **Locator from GPS**, or entered by hand
-- **Phone page over Wi-Fi**: the pager opens its own access point and serves a
+- **Phone page over Wi-Fi** (switched on and off in the setup): the pager opens its own access point and serves a
   page with the decodes, the main controls, received WEFAX pictures and the
   logbook download. In the logbook, key Q shows QR codes that join the Wi-Fi
   and fetch the ADIF file
@@ -126,11 +134,14 @@ the pager, so reception works held next to the speaker of any receiver.
 
 Work in progress.
 
-- The signal processing of all modes is covered by 47 host tests.
+- The signal processing of all modes and the mode scanner are covered by 58
+  host tests.
 - On the device, FT8 reception has been checked against real signals; a slot is
   decoded in about 0.7 s.
 - NAVTEX and SSTV have only been tested against generated signals; WEFAX has
   received real weather charts.
+- The mode scanner is tested against generated signals down to 0 dB SNR and has
+  named real RTTY of the German weather service (50 baud, 450 Hz shift).
 - Transmitting works through the interface board: PTT keys the radio and FT8
   calls have gone out on the air.
 
@@ -140,9 +151,12 @@ DIGIWAVE is installed as one application next to others (for example Meshtastic)
 with the [Launcher](https://github.com/bmorcelli/Launcher) by bmorcelli: build
 the firmware, copy `.pio/build/pager/firmware.bin` to the SD card and install it
 from the Launcher. An update can also be written over USB straight into the
-Launcher slot of DIGIWAVE, at the offset its partition table gives it:
+Launcher slot of DIGIWAVE (`ft8pag`), at the offset its partition table gives
+it. The Launcher rewrites the table when applications are installed, so read it
+first (`esptool.py read_flash 0x8000 0xc00 table.bin`); with the present table
+the offset is 0x1a0000:
 
-    esptool.py write_flash 0x870000 .pio/build/pager/firmware.bin
+    esptool.py write_flash 0x1a0000 .pio/build/pager/firmware.bin
 
 Do not use `pio run -t upload` on a pager with the Launcher: it writes
 `partitions.csv`, the layout for running DIGIWAVE alone, together with its own
@@ -173,6 +187,11 @@ The same everywhere:
 
 FT8 and FT4 keep a line with their keys at the bottom of the screen; the other
 modes use the whole screen for text, spectrum or picture.
+
+The scanner analyses every two seconds: the wheel picks a signal on the
+waterfall, A goes back to the strongest, Enter opens the mode that decodes it.
+A guess shows once two analyses agree. "Input too quiet" means next to no audio
+arrives: check the cable and the level of the radio.
 
 Every WEFAX line is kept in memory (half an hour of reception), so a picture
 can be saved as a whole at any time, and is saved by itself when the station's

@@ -21,11 +21,16 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
 | NAVTEX | ja | – |
 | WEFAX (120 LPM) | ja, Bilder als BMP auf der SD-Karte | – |
 | SSTV (Martin 1/2, Scottie 1/2, Robot 36, PD 120/180) | ja, in Farbe, Bilder als BMP auf der SD-Karte | – |
+| Betriebsarten-Scanner (experimentell) | erkennt FT8, FT4, CW, RTTY, NAVTEX, PSK31/63, SSTV, WEFAX | – |
 
 ## Funktionen
 
 - Kachelmenü mit eigenen Grafiken (Ordner `DIGIWAVE_Firmware_Grafiken`)
 - Wasserfall unter den Dekodierungen
+- Betriebsarten-Scanner (Kachel SCAN, experimentell): bestimmt für das stärkste
+  oder das mit dem Rad gewählte Signal die Betriebsart aus Bandbreite, Tönen,
+  Symbolrate und Sendedauer; Enter öffnet die passende Betriebsart und
+  übernimmt die gemessenen Töne (z. B. Mark, Shift und Tempo bei RTTY)
 - Vollständige FT8/FT4-Verbindungen: CQ rufen oder eine Station mit einem Druck
   beantworten; das Logbuch liegt als ADIF auf der SD-Karte (`/digiwave.adi`)
 - CB-Betrieb (11 m) für FT8/FT4 nach den Regeln von WSJT-CB: CB-Rufzeichen wie
@@ -47,7 +52,7 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
   nimmt eine eingetippte; FT8, FT4 und CB-Betrieb merken sich je ihre eigene
 - Zeit aus GPS mit Sekundenimpuls, ohne Empfang aus der Echtzeituhr
 - Locator automatisch aus der GPS-Position oder von Hand
-- WLAN-Zugangspunkt mit einer Seite fürs Handy: Dekodierungen, wichtigste
+- WLAN-Zugangspunkt (im Setup ein- und auszuschalten) mit einer Seite fürs Handy: Dekodierungen, wichtigste
   Bedienung, WEFAX-Bilder, Download des Logbuchs
 - Stromsparen: Display aus nach drei Minuten ohne Eingabe; Tiefschlaf, wenn in
   dieser Zeit auch nichts empfangen wurde. Aufwecken mit dem Rad. Ausschalten
@@ -56,8 +61,9 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
 ## Aufbau
 
 - `lib/ft8core` – Signalverarbeitung ohne Hardwarebezug: Dekoder, Encoder,
-  QSO-Ablauf, ADIF, Länder- und CB-Tabellen, CW, FSK-Modem, RTTY, NAVTEX, WEFAX.
-  Läuft auch auf dem Mac und wird dort getestet (47 Tests, `pio test -e native`)
+  QSO-Ablauf, ADIF, Länder- und CB-Tabellen, CW, FSK-Modem, RTTY, NAVTEX, WEFAX,
+  SSTV, Betriebsarten-Scanner. Läuft auch auf dem Mac und wird dort getestet
+  (58 Tests, `pio test -e native`)
 - `lib/ft8_lib` – übernommene Bibliothek von Karlis Goba (MIT) für die
   FT8/FT4-Codierung
 - `src` – Firmware: `engine` (Empfangs- und Sendetask für alle Betriebsarten),
@@ -74,9 +80,12 @@ Repository: https://github.com/MrNash23/DIGIWAVE (öffentlich)
 Gebaut wird mit PlatformIO und der pioarduino-Plattform (Arduino-ESP32 3.3).
 Auf dem Pager liegt DIGIWAVE als eine App neben anderen (zum Beispiel
 Meshtastic) und wird über den Launcher von bmorcelli gestartet. Ein Update
-kommt per USB direkt in den Platz von DIGIWAVE:
+kommt per USB direkt in den Platz von DIGIWAVE (`ft8pag`). Der Launcher
+schreibt die Partitionstabelle beim Installieren neu, deshalb vorher die
+Adresse dort nachsehen (`esptool.py read_flash 0x8000 0xc00 table.bin`); mit
+der jetzigen Tabelle:
 
-    esptool.py write_flash 0x870000 .pio/build/pager/firmware.bin
+    esptool.py write_flash 0x1a0000 .pio/build/pager/firmware.bin
 
 Nicht `pio run -t upload` verwenden: Das schreibt Bootloader und
 `partitions.csv` mit und löscht damit Launcher und die anderen Apps.
@@ -89,6 +98,8 @@ Datensatz); neu erzeugt werden sie mit `tools/make_voice.py`.
 - FT8-Empfang ist am Gerät mit echten Signalen geprüft; ein Zeitschlitz wird in
   etwa 0,7 s dekodiert.
 - NAVTEX und SSTV sind bisher nur mit erzeugten Signalen getestet; WEFAX hat echte Wetterkarten empfangen.
+- Der Scanner ist mit erzeugten Signalen bis 0 dB Rauschabstand getestet und
+  hat echtes RTTY des DWD (50 Baud, 450 Hz Shift) richtig erkannt.
 - Senden: FT8-CQ über die Zusatzplatine auf dem Band gesendet (PTT und Pegel geprüft), noch ohne Antwort einer Gegenstation.
 - Audio läuft über die Zusatzplatine am 12-poligen Anschluss (Line-In, Line-Out,
   PTT), wenn sie steckt; sonst über Mikrofon und Lautsprecher des Pagers. Die
