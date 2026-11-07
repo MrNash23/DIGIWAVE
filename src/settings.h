@@ -20,8 +20,9 @@ struct Settings {
     uint32_t dial_navtex_hz = 518000;   // of the station; the radio is tuned lower by the audio centre
     uint32_t dial_wefax_hz = 7880000;   // of the station; the radio is tuned 1.9 kHz lower
     uint32_t dial_sstv_hz = 14230000;
+    uint32_t dial_scan_hz = 14070000;
 
-    /// The frequency that applies to a mode (0..5, see engine::Mode) in the current kind of operation.
+    /// The frequency that applies to a mode (0..7, see engine::Mode) in the current kind of operation.
     uint32_t &dialHz(int mode)
     {
         switch (mode) {
@@ -31,7 +32,8 @@ struct Settings {
         case 3: return dial_rtty_hz;
         case 4: return dial_navtex_hz;
         case 5: return dial_wefax_hz;
-        default: return dial_sstv_hz;
+        case 6: return dial_sstv_hz;
+        default: return dial_scan_hz;
         }
     }
     int tx_hz = 1500;           // audio frequency of the lowest tone

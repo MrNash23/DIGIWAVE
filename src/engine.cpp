@@ -9,6 +9,7 @@
 #include <ft8_country.h>
 #include <ft8_encoder.h>
 #include <ft8_hashtable.h>
+#include <mode_scanner.h>
 #include <navtex_decoder.h>
 #include <rtty_codec.h>
 #include <sstv.h>
@@ -50,6 +51,10 @@ digi::SstvDecoder sstv_rx;
 QueueHandle_t sstv_line_queue, sstv_event_queue;
 SstvState sstv_st{};
 volatile int sstv_start_request = -1;  // format to start by hand, -2 to stop
+digi::ModeScanner scanner;
+digi::ScanResult scan_result;  // guarded by lock
+uint32_t scan_seq = 0;          // guarded by lock
+volatile float scan_target_hz = 0;
 
 // Guarded by lock
 Entry hist[kHistory];
@@ -678,6 +683,64 @@ void stepSstv(int16_t *pcm)
     }
 }
 
+// --- mode scanner --------------------------------------------------------------------
+
+constexpr uint32_t kScanEveryMs = 2000;
+TaskHandle_t scan_task = nullptr;
+volatile bool scan_busy = false;
+
+// The analysis takes a while on the device. It runs in a task of its own on a
+// copy of the audio, so that this task goes on reading the codec: gaps in the
+// audio would look like signals of their own.
+void scanWorker(void *)
+{
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        uint32_t t0 = millis();
+        digi::ScanResult r = scanner.analyseSnapshot();
+        // Once a minute, from the first analysis with enough audio on
+        static uint32_t last_report = 0;
+        uint32_t took = millis() - t0;
+        if (r.mode != digi::ScanMode::None && (last_report == 0 || millis() - last_report > 60000)) {
+            last_report = millis();
+            Serial.printf("[scan] %s, analysis took %u ms\n", digi::scanModeName(r.mode), (unsigned)took);
+        }
+        {
+            Guard g;
+            scan_result = r;
+            ++scan_seq;
+            st.locked = r.mode != digi::ScanMode::None;
+        }
+        scan_busy = false;
+    }
+}
+
+void stepScan(int16_t *pcm)
+{
+    static uint32_t last = 0;
+    if (!readChunk(pcm)) {
+        return;
+    }
+    scanner.feed(pcm, kChunk);
+    if (scan_busy || millis() - last < kScanEveryMs) {
+        return;
+    }
+    if (scan_task == nullptr) {
+        // Its stack goes to the external memory; the internal one is scarce. Below the
+        // main loop in priority, so that the display and the keys stay quick.
+        if (xTaskCreatePinnedToCoreWithCaps(scanWorker, "scan", 8192, nullptr, 0, &scan_task, 1,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+            scan_task = nullptr;
+            return;
+        }
+    }
+    last = millis();
+    scanner.setTarget(scan_target_hz);
+    scanner.snapshot();
+    scan_busy = true;
+    xTaskNotifyGive(scan_task);
+}
+
 // --- task ----------------------------------------------------------------------------
 
 void enterMode(Mode m, bool mode_changed)
@@ -723,6 +786,17 @@ void enterMode(Mode m, bool mode_changed)
         if (mode_changed) {
             fax_rx.begin(kFaxWidth, 120);
             fax_rx.onLine(onFaxLine, nullptr);
+        }
+        break;
+    case Mode::SCAN:
+        if (mode_changed) {
+            if (!scanner.begin()) {
+                Serial.println("[dw] scanner: out of memory");
+            }
+            scan_target_hz = 0;
+            Guard g;
+            scan_result = digi::ScanResult{};
+            ++scan_seq;
         }
         break;
     case Mode::SSTV:
@@ -778,6 +852,8 @@ void task(void *)
             stepTextMode(current, pcm);
         } else if (current == Mode::SSTV) {
             stepSstv(pcm);
+        } else if (current == Mode::SCAN) {
+            stepScan(pcm);
         } else {
             stepFax(pcm);
         }
@@ -788,7 +864,7 @@ void task(void *)
 
 const char *modeName(Mode m)
 {
-    static const char *const names[kModes] = {"FT8", "FT4", "CW", "RTTY", "NAVTEX", "WEFAX", "SSTV"};
+    static const char *const names[kModes] = {"FT8", "FT4", "CW", "RTTY", "NAVTEX", "WEFAX", "SSTV", "SCAN"};
     return names[(int)m];
 }
 
@@ -1141,6 +1217,25 @@ void sstvStop()
 const char *sstvFormatName(int format)
 {
     return digi::sstvInfo((digi::SstvMode)(constrain(format, 0, kSstvFormats - 1) + 1)).name;
+}
+
+digi::ScanResult scanResult(uint32_t *seq)
+{
+    Guard g;
+    if (seq != nullptr) {
+        *seq = scan_seq;
+    }
+    return scan_result;
+}
+
+void scanTarget(float hz)
+{
+    scan_target_hz = hz;
+}
+
+float scanTargetHz()
+{
+    return scan_target_hz;
 }
 
 }  // namespace engine

@@ -33,7 +33,7 @@ IMAGES = [
     ("tile_sstv", "tile_sstv_256x256.png", "rgb565a8", TILE),
     ("tile_logbook", "tile_logbook_256x256.png", "rgb565a8", TILE),
     ("tile_setup", "tile_setup_256x256.png", "rgb565a8", TILE),
-    ("tile_wifi", "tile_wifi_256x256.png", "rgb565a8", TILE),
+    ("tile_scan", "tile_scan_256x256.png", "rgb565a8", TILE),
     ("status_gps_fix", "status_gps_fix_16x16.png", "a8"),
     ("status_gps_no_fix", "status_gps_no_fix_16x16.png", "a8"),
     ("status_wifi_on", "status_wifi_on_16x16.png", "a8"),

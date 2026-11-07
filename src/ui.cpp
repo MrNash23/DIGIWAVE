@@ -50,7 +50,7 @@ const lv_color_t kColWarn = lv_color_hex(0xE0A020);
 const lv_color_t kColAccent = lv_color_hex(0x3766FF);
 const lv_color_t kColFrame = lv_color_hex(0x202D7A);
 
-enum class Screen { Home, Slot, Text, Fax, Sstv, Log, Setup, About, Band, FaxList, FaxView, Schedule, HomeWifi };
+enum class Screen { Home, Slot, Text, Fax, Sstv, Scan, Log, Setup, About, Band, FaxList, FaxView, Schedule, HomeWifi };
 Screen screen = Screen::Home;
 
 void openHome();
@@ -1683,7 +1683,7 @@ void pollPower(const engine::Status &st, bool received)
     // WEFAX and NAVTEX are listened to for a long time without touching the
     // device, and a picture arriving is not "received" in the sense of a
     // decode: these modes keep the device awake, only the display goes off.
-    bool listening = st.mode == Mode::WEFAX || st.mode == Mode::NAVTEX || st.mode == Mode::SSTV;
+    bool listening = st.mode == Mode::WEFAX || st.mode == Mode::NAVTEX || st.mode == Mode::SSTV || st.mode == Mode::SCAN;
     bool busy = received || listening || st.transmitting || web::inUse() ||
                 (engine::isSlotMode(st.mode) && strcmp(st.qso_state, "Idle") != 0);
     if (busy) {
@@ -2012,15 +2012,266 @@ void setupKey(char c)
     drawSetup();
 }
 
+// --- mode scanner (experimental) ----------------------------------------------------------
+
+constexpr int kScanWfY = 182, kScanWfHeight = 40, kScanMarkY = 173;
+constexpr int kScanX = 108;  // right of the tile
+
+lv_obj_t *scr_scan;
+Header scan_header;
+Waterfall scan_wf;
+lv_obj_t *scan_tile, *scan_name, *scan_pct, *scan_conf, *scan_key[6], *scan_val[6], *scan_action, *scan_action_text, *scan_hint,
+    *scan_span, *scan_mark;
+uint32_t scan_seen = ~0u;
+digi::ScanResult scan_shown, scan_last;  // shown: the guess on display, last: the newest analysis
+
+void buildScan()
+{
+    scr_scan = makeScreen();
+    scan_header = makeHeader(scr_scan, false);
+    scan_tile = lv_image_create(scr_scan);
+    lv_obj_set_pos(scan_tile, 10, 26);
+    scan_name = makeLabel(scr_scan, kScanX, 27, 260, &lv_font_montserrat_14, kColCq);
+    scan_pct = makeLabel(scr_scan, 400, 27, 72, &lv_font_montserrat_14, kColText);
+    lv_obj_set_style_text_align(scan_pct, LV_TEXT_ALIGN_RIGHT, 0);
+    scan_conf = makeBar(scr_scan, kScanX, 47, kWidth - kScanX - 8, 5, kColCq);
+    // Three rows of two readings: a dim name, the value beside it
+    for (int i = 0; i < 6; ++i) {
+        int x = kScanX + (i % 2) * 186, y = 60 + (i / 2) * 18;
+        scan_key[i] = makeLabel(scr_scan, x, y + 2, 50, &lv_font_montserrat_12, kColDim);
+        scan_val[i] = makeLabel(scr_scan, x + 50, y, 134, &lv_font_montserrat_14, kColText);
+    }
+    // What Enter does, as a button
+    scan_action = makeBox(scr_scan, 10, 122, kWidth - 20, 24, kColBg);
+    lv_obj_set_style_radius(scan_action, 5, 0);
+    lv_obj_set_style_border_width(scan_action, 1, 0);
+    scan_action_text = makeLabel(scan_action, 10, 4, kWidth - 40, &lv_font_montserrat_14, kColText);
+    scan_hint = makeLabel(scr_scan, 10, 153, kWidth - 20, &lv_font_montserrat_12, kColDim);
+    lv_label_set_text(scan_hint, "wheel: pick a signal    A: strongest    press: functions    Back: menu");
+    scan_wf = makeWaterfall(scr_scan, kScanWfY, kScanWfHeight);
+    // The band of the signal looked at, and the frequency chosen with the wheel
+    scan_span = makeBox(scr_scan, kWfX, kScanMarkY + 3, 10, 3, kColCq);
+    scan_mark = makeIcon(scr_scan, kWfX, kScanMarkY, &tri_image);
+}
+
+/// The DIGIWAVE mode that receives what the scanner found, false if there is none
+bool scanModeToOpen(const digi::ScanResult &r, Mode *m)
+{
+    switch (r.mode) {
+    case digi::ScanMode::FT8: *m = Mode::FT8; return true;
+    case digi::ScanMode::FT4: *m = Mode::FT4; return true;
+    case digi::ScanMode::CW: *m = Mode::CW; return true;
+    case digi::ScanMode::RTTY: *m = Mode::RTTY; return true;
+    case digi::ScanMode::NAVTEX: *m = Mode::NAVTEX; return true;
+    case digi::ScanMode::WEFAX: *m = Mode::WEFAX; return true;
+    case digi::ScanMode::SSTV: *m = Mode::SSTV; return true;
+    default: return false;
+    }
+}
+
+bool scanFound(const digi::ScanResult &r)
+{
+    return r.mode != digi::ScanMode::None && r.mode != digi::ScanMode::Unknown;
+}
+
+void setScanValue(int i, const char *key, const char *fmt, ...)
+{
+    lv_label_set_text(scan_key[i], key);
+    char text[40] = "";
+    if (fmt != nullptr) {
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(text, sizeof(text), fmt, ap);
+        va_end(ap);
+    }
+    lv_label_set_text(scan_val[i], text);
+}
+
+void drawScanResult(const digi::ScanResult &r)
+{
+    bool found = scanFound(r);
+    Mode m = Mode::SCAN;
+    bool can_open = scanModeToOpen(r, &m);
+    // The tile of the mode found; the scanner's own, dimmed, while there is none
+    static const lv_image_dsc_t *const tiles[] = {&img_tile_ft8,    &img_tile_ft4,   &img_tile_cw,  &img_tile_rtty,
+                                                  &img_tile_navtex, &img_tile_wefax, &img_tile_sstv};
+    lv_image_set_src(scan_tile, can_open ? tiles[(int)m] : &img_tile_scan);
+    lv_obj_set_style_image_opa(scan_tile, can_open ? LV_OPA_COVER : LV_OPA_40, 0);
+
+    if (r.quiet) {
+        lv_label_set_text(scan_name, "Input too quiet");
+    } else if (r.mode == digi::ScanMode::None) {
+        lv_label_set_text(scan_name, "Listening ...");
+    } else if (!found) {
+        lv_label_set_text(scan_name, "Not recognised");
+    } else {
+        lv_label_set_text(scan_name, digi::scanModeName(r.mode));
+    }
+    lv_obj_set_style_text_color(scan_name, found ? kColCq : kColDim, 0);
+    lv_label_set_text_fmt(scan_pct, found ? "%d %%" : "", r.confidence);
+    lv_bar_set_value(scan_conf, found ? r.confidence : 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(scan_conf, r.confidence >= 75 ? kColCq : kColWarn, LV_PART_INDICATOR);
+
+    for (int i = 0; i < 6; ++i) {
+        setScanValue(i, "", nullptr);
+    }
+    if (r.mode != digi::ScanMode::None) {
+        int i = 0;
+        setScanValue(i++, "band", "%d - %d Hz", (int)r.low_hz, (int)r.high_hz);
+        setScanValue(i++, "level", "%+.0f dB", r.level_db);
+        if (r.baud > 0) {
+            setScanValue(i++, "rate", "%.2f Bd", r.baud);
+        }
+        if (r.shift_hz > 0) {
+            setScanValue(i++, "shift", "%d Hz", (int)(r.shift_hz + 0.5f));
+        }
+        if (r.wpm > 0) {
+            setScanValue(i++, "speed", "%d WPM", r.wpm);
+        }
+        if (r.tones > 0 && i < 6) {
+            setScanValue(i++, "tones", "%d", r.tones);
+        }
+        if (r.burst_s > 0 && i < 6) {
+            setScanValue(i++, "bursts", "%.1f s", r.burst_s);
+        }
+        if (r.duty > 0 && i < 6) {
+            setScanValue(i++, "on", "%d %%", (int)(r.duty * 100 + 0.5f));
+        }
+    }
+
+    if (can_open) {
+        lv_obj_set_style_border_color(scan_action, kColCq, 0);
+        lv_obj_set_style_bg_color(scan_action, kColSel, 0);
+        lv_obj_set_style_text_color(scan_action_text, kColText, 0);
+        lv_label_set_text_fmt(scan_action_text, "Enter   decode it in %s%s", engine::modeName(m),
+                              m == Mode::CW || m == Mode::RTTY || m == Mode::NAVTEX ? ", tones taken over" : "");
+    } else {
+        lv_obj_set_style_border_color(scan_action, kColFrame, 0);
+        lv_obj_set_style_bg_color(scan_action, kColBg, 0);
+        lv_obj_set_style_text_color(scan_action_text, kColDim, 0);
+        lv_label_set_text(scan_action_text, r.quiet ? "Next to no audio arrives: check the cable and the radio's level"
+                                            : (found ? "DIGIWAVE has no decoder for this" : "Tune in a signal; it is analysed every 2 s"));
+    }
+
+    // Marks above the spectrum
+    const int left = kWfX, right = kWfX + engine::kWaterfallBins - 1;
+    if (r.mode != digi::ScanMode::None) {
+        int xa = constrain(waterfallX(r.low_hz), left, right), xb = constrain(waterfallX(r.high_hz), left, right);
+        lv_obj_remove_flag(scan_span, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(scan_span, xa);
+        lv_obj_set_width(scan_span, max(2, xb - xa + 1));
+        lv_obj_set_style_bg_color(scan_span, found ? kColCq : kColDim, 0);
+    } else {
+        lv_obj_add_flag(scan_span, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void drawScan()
+{
+    engine::Status st = engine::status();
+    drawHeader(scan_header, st);
+    float target = engine::scanTargetHz();
+    if (target > 0) {
+        lv_label_set_text_fmt(scan_header.state, "SCAN  signal at %d Hz", (int)target);
+    } else {
+        lv_label_set_text(scan_header.state, "SCAN  strongest signal");
+    }
+
+    uint32_t seq;
+    digi::ScanResult r = engine::scanResult(&seq);
+    if (seq != scan_seen) {
+        // A new guess shows once two analyses agree, or at once when it is sure;
+        // the readings of the one shown follow every analysis
+        scan_seen = seq;
+        if (scan_shown.mode == digi::ScanMode::None || r.mode == scan_shown.mode || r.mode == scan_last.mode || r.confidence >= 90) {
+            scan_shown = r;
+        }
+        scan_last = r;
+        drawScanResult(scan_shown);
+    }
+    if (target > 0) {
+        lv_obj_remove_flag(scan_mark, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(scan_mark, constrain(waterfallX(target), kWfX, kWfX + engine::kWaterfallBins - 1) - kTriW / 2);
+    } else {
+        lv_obj_add_flag(scan_mark, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/// Forgets the guesses shown, after the signal to look at changed
+void scanStartOver()
+{
+    scan_shown = scan_last = digi::ScanResult{};
+    engine::scanResult(&scan_seen);  // the analysis under way still looks at the old signal
+    drawScanResult(scan_shown);
+}
+
+void scanRotate(int dir)
+{
+    float target = engine::scanTargetHz();
+    if (target <= 0) {
+        // From the signal found last
+        digi::ScanResult r = engine::scanResult(nullptr);
+        target = r.peak_hz > 0 ? r.peak_hz : 1500.0f;
+    }
+    engine::scanTarget(constrain(target - dir * 25.0f, 250.0f, 2800.0f));  // up moves up, as in the other modes
+    scanStartOver();
+    drawScan();
+}
+
+void scanAuto()
+{
+    engine::scanTarget(0);
+    scanStartOver();
+    drawScan();
+}
+
+/// Opens the mode the scanner found, with its tones taken over
+void scanOpenMode()
+{
+    const digi::ScanResult &r = scan_shown;
+    Mode m;
+    if (!scanModeToOpen(r, &m)) {
+        showNotice("Nothing found that DIGIWAVE receives");
+        return;
+    }
+    switch (r.mode) {
+    case digi::ScanMode::CW: settings.cw_tone = constrain((int)lrintf(r.peak_hz / 10.0f) * 10, 400, 1200); break;
+    case digi::ScanMode::RTTY:
+        // In USB the mark tone is the lower one
+        settings.rtty_mark = (int)lrintf(r.low_hz + 20.0f);
+        settings.rtty_shift = constrain((int)lrintf(r.shift_hz / 5.0f) * 5, 85, 850);
+        settings.rtty_50_baud = r.baud > 47.5f;
+        settings.rtty_reverse = false;
+        break;
+    case digi::ScanMode::NAVTEX: settings.navtex_center = (int)lrintf(0.5f * (r.low_hz + r.high_hz)); break;
+    default: break;
+    }
+    settings.save();
+    engine::applySettings();
+    openMode(m);
+}
+
+void scanKey(char c)
+{
+    switch (tolower((unsigned char)c)) {
+    case 'a': scanAuto(); break;
+    case '\n':
+    case '\r': scanOpenMode(); break;
+    case 'm':
+    case 0x08: openHome(); break;
+    default: break;
+    }
+}
+
 // --- home screen -----------------------------------------------------------------------
 
 // The artwork of each tile carries its frame and its name
 const lv_image_dsc_t *const kTileIcons[] = {
     &img_tile_ft8,    &img_tile_ft4,   &img_tile_cw,      &img_tile_rtty,  &img_tile_navtex,
-    &img_tile_wefax,  &img_tile_sstv,  &img_tile_logbook, &img_tile_setup, &img_tile_wifi,
+    &img_tile_wefax,  &img_tile_sstv,  &img_tile_scan,    &img_tile_logbook, &img_tile_setup,
 };
 constexpr int kTiles = sizeof(kTileIcons) / sizeof(kTileIcons[0]);
-constexpr int kTileLog = engine::kModes, kTileSetup = kTileLog + 1, kTileWifi = kTileLog + 2;
+constexpr int kTileLog = engine::kModes, kTileSetup = kTileLog + 1;
 constexpr int kTileSize = 86;  // TILE in tools/make_assets.py
 
 lv_obj_t *scr_home;
@@ -2135,6 +2386,13 @@ void openMode(Mode m)
         if (!noticeActive()) {
             showNotice("Press the wheel for functions");
         }
+    } else if (m == Mode::SCAN) {
+        screen = Screen::Scan;
+        scanStartOver();
+        lv_screen_load(scr_scan);
+        if (!noticeActive()) {
+            showNotice("Experimental: guesses the mode of a signal");
+        }
     } else if (m == Mode::SSTV) {
         screen = Screen::Sstv;
         sstv_dirty = true;
@@ -2165,11 +2423,6 @@ void homePress()
         openLog();
     } else if (tile_selected == kTileSetup) {
         openSetup();
-    } else {
-        settings.wifi_on = !settings.wifi_on;
-        settings.save();
-        web::apply();
-        drawHome();
     }
 }
 
@@ -3034,7 +3287,8 @@ void addValue(int *value, int min, int max, int step, const char *fmt, ...)
 
 bool inApp()
 {
-    return screen == Screen::Slot || screen == Screen::Text || screen == Screen::Fax || screen == Screen::Sstv || screen == Screen::FaxList ||
+    return screen == Screen::Slot || screen == Screen::Text || screen == Screen::Fax || screen == Screen::Sstv || screen == Screen::Scan ||
+           screen == Screen::FaxList ||
            screen == Screen::FaxView;
 }
 
@@ -3145,6 +3399,15 @@ void fillActs()
         addAct("C", clearSstvNow, false, "Clear the picture");
         addAct("P", openFaxList, false, "Saved pictures");
         break;
+    case Mode::SCAN: {
+        Mode found;
+        if (scanModeToOpen(scan_shown, &found)) {
+            addAct("Enter", scanOpenMode, false, "Receive it in %s", engine::modeName(found));
+        }
+        addAct("A", scanAuto, false, "Look at the strongest signal");
+        addAct("Back", openHome, false, "Main menu");
+        return;
+    }
     }
     bool letters = !engine::canSendText(st.mode);  // in CW and RTTY letters are text to send
     addAct(letters ? "B" : "", openBand, false, st.mode == Mode::NAVTEX || st.mode == Mode::WEFAX ? "Stations, frequencies" : "Band and frequency");
@@ -3449,6 +3712,7 @@ void pollInput()
         case Screen::Text: textRotate(dir); break;
         case Screen::Fax: engine::faxShift(dir * 16); break;
         case Screen::Sstv: sstvRotate(dir); break;
+        case Screen::Scan: scanRotate(dir); break;
         case Screen::Log:
             log_top += dir;
             drawLog();
@@ -3485,6 +3749,7 @@ void pollInput()
         case Screen::Text:
         case Screen::Fax:
         case Screen::Sstv:
+        case Screen::Scan:
         case Screen::FaxView: openOverlay(); break;
         case Screen::Log:
             log_stats = !log_stats;
@@ -3522,6 +3787,7 @@ void pollInput()
         case Screen::Text: textKey(c); break;
         case Screen::Fax: faxKey(c); break;
         case Screen::Sstv: sstvKey(c); break;
+        case Screen::Scan: scanKey(c); break;
         case Screen::Log: logKey(c); break;
         case Screen::Setup: setupKey(c); break;
         case Screen::HomeWifi: homeWifiKey(c); break;
@@ -3631,6 +3897,7 @@ void begin()
     buildPalette();
     buildSlot();
     buildText();
+    buildScan();  // after buildText(), which makes the triangle
     buildFax();
     buildSstv();
     buildSetup();
@@ -3701,7 +3968,8 @@ void loop()
     web::loop();
 
     // Nothing is drawn while the display is off; the waterfall rows are still fetched
-    drawWaterfall(display_off ? nullptr : (screen == Screen::Slot ? &slot_wf : (screen == Screen::Text ? &text_wf : nullptr)));
+    Waterfall *wf = screen == Screen::Slot ? &slot_wf : (screen == Screen::Text ? &text_wf : (screen == Screen::Scan ? &scan_wf : nullptr));
+    drawWaterfall(display_off ? nullptr : wf);
     if (!display_off && millis() - last_draw >= 200) {
         last_draw = millis();
         switch (screen) {
@@ -3710,6 +3978,7 @@ void loop()
         case Screen::Text: drawText(); break;
         case Screen::Fax: drawFax(); break;
         case Screen::Sstv: drawSstv(); break;
+        case Screen::Scan: drawScan(); break;
         case Screen::Schedule: drawSchedule(); break;
         case Screen::HomeWifi: drawHomeWifi(); break;
         default: break;

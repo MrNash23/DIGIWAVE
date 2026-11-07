@@ -18,6 +18,7 @@
 #include <ft8_encoder.h>
 #include <ft8_hashtable.h>
 #include <ft8_qso.h>
+#include <mode_scanner.h>
 #include <navtex_decoder.h>
 #include <rtty_codec.h>
 #include <sstv.h>
@@ -1525,6 +1526,250 @@ static void test_wefax_manual_shift()
     TEST_ASSERT_FALSE(dec.phased());
 }
 
+// --- mode scanner ------------------------------------------------------------------
+
+static digi::ScanResult scan(const std::vector<int16_t> &pcm, float target = 0)
+{
+    static digi::ModeScanner scanner;
+    TEST_ASSERT_TRUE(scanner.begin());
+    scanner.setTarget(target);
+    for (size_t pos = 0; pos < pcm.size(); pos += 480) {
+        scanner.feed(pcm.data() + pos, std::min<size_t>(480, pcm.size() - pos));
+    }
+    digi::ScanResult r = scanner.analyse();
+    printf("  scan: %-9s %2d %%  %4.0f-%4.0f Hz  peak %4.0f  +%2.0f dB  tones %d  shift %3.0f  %5.2f Bd  duty %.2f  burst %4.1f s  %d wpm\n",
+           digi::scanModeName(r.mode), r.confidence, r.low_hz, r.high_hz, r.peak_hz, r.level_db, r.tones, r.shift_hz, r.baud,
+           r.duty, r.burst_s, r.wpm);
+    return r;
+}
+
+static void expectMode(digi::ScanMode want, const digi::ScanResult &r)
+{
+    TEST_ASSERT_EQUAL_STRING(digi::scanModeName(want), digi::scanModeName(r.mode));
+}
+
+static std::vector<int16_t> repeatTo(std::vector<int16_t> pcm, float seconds)
+{
+    std::vector<int16_t> out;
+    while (out.size() < (size_t)(seconds * 12000)) {
+        out.insert(out.end(), pcm.begin(), pcm.end());
+    }
+    out.resize((size_t)(seconds * 12000));
+    return out;
+}
+
+static void test_scan_ft8()
+{
+    std::vector<int16_t> pcm = synthSlot("CQ DL1ABC JO62", 1200);
+    std::vector<int16_t> b = synthSlot("DL1ABC OK1XYZ JN79", 1200);
+    pcm.insert(pcm.end(), b.begin(), b.end());
+    b = synthSlot("CQ DL1ABC JO62", 1200);
+    pcm.insert(pcm.end(), b.begin(), b.end());
+    addNoise(pcm, 600);
+    digi::ScanResult r = scan(pcm);
+    expectMode(digi::ScanMode::FT8, r);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 12.7f, r.burst_s);
+    TEST_ASSERT_FLOAT_WITHIN(30.0f, 1222.0f, r.peak_hz);
+}
+
+static void test_scan_ft4()
+{
+    std::vector<int16_t> pcm;
+    for (int slot = 0; slot < 4; ++slot) {
+        Synth synth;
+        TEST_ASSERT_TRUE(synth.begin(slot & 1 ? "DL1ABC OK1XYZ -05" : "CQ DL1ABC JO62", 900, 0.5f, Protocol::FT4));
+        std::vector<int16_t> s(90000, 0);  // 7.5 s
+        size_t pos = 6000;
+        while (!synth.done()) {
+            pos += synth.read(s.data() + pos, 500);
+        }
+        pcm.insert(pcm.end(), s.begin(), s.end());
+    }
+    addNoise(pcm, 600);
+    digi::ScanResult r = scan(pcm);
+    expectMode(digi::ScanMode::FT4, r);
+    TEST_ASSERT_FLOAT_WITHIN(0.8f, 5.0f, r.burst_s);
+}
+
+static void test_scan_rtty()
+{
+    digi::RttyConfig cfg;  // 45.45 Bd, 170 Hz
+    std::vector<int16_t> pcm = sendRtty("RYRYRY CQ CQ DE DL1ABC DL1ABC PSE K THE QUICK BROWN FOX 1234567890 "
+                                        "JUMPS OVER THE LAZY DOG CQ CQ DE DL1ABC K",
+                                        cfg);
+    pcm = repeatTo(pcm, 14);
+    addNoise(pcm, 600);
+    digi::ScanResult r = scan(pcm);
+    expectMode(digi::ScanMode::RTTY, r);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 45.45f, r.baud);
+    TEST_ASSERT_FLOAT_WITHIN(12.0f, 170.0f, r.shift_hz);
+
+    // The German weather service: 50 Bd, 450 Hz
+    cfg.baud = 50;
+    cfg.mark_hz = 1000;
+    cfg.space_hz = 1450;
+    pcm = repeatTo(sendRtty("ZCZC 123 WETTERBERICHT DEUTSCHE BUCHT WEST 6 SEEGANG 2 METER NNNN ", cfg), 14);
+    addNoise(pcm, 600);
+    r = scan(pcm);
+    expectMode(digi::ScanMode::RTTY, r);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 50.0f, r.baud);
+    TEST_ASSERT_FLOAT_WITHIN(15.0f, 450.0f, r.shift_hz);
+}
+
+static void test_scan_navtex()
+{
+    std::vector<int16_t> pcm = repeatTo(sitorAudio(sitorCodes(kNavtexMessage)), 14);
+    addNoise(pcm, 600);
+    digi::ScanResult r = scan(pcm);
+    expectMode(digi::ScanMode::NAVTEX, r);
+    TEST_ASSERT_FLOAT_WITHIN(2.0f, 100.0f, r.baud);
+}
+
+static void test_scan_cw()
+{
+    std::vector<int16_t> pcm = repeatTo(keyCw("CQ CQ CQ DE DL1ABC DL1ABC PSE K", 20, 650), 14);
+    addNoise(pcm, 600);
+    digi::ScanResult r = scan(pcm);
+    expectMode(digi::ScanMode::CW, r);
+    TEST_ASSERT_INT_WITHIN(4, 20, r.wpm);
+    TEST_ASSERT_FLOAT_WITHIN(15.0f, 650.0f, r.peak_hz);
+}
+
+static std::vector<int16_t> psk(float baud, float hz, float seconds)
+{
+    // Random bits; a zero reverses the phase, with the amplitude going through zero
+    std::vector<int16_t> pcm;
+    int sps = (int)lrintf(12000 / baud);
+    float sign = 1, phi = 0;
+    for (int sym = 0; sym < (int)(seconds * baud); ++sym) {
+        rng_state = rng_state * 1664525u + 1013904223u;
+        bool reverse = (rng_state >> 20) & 1;
+        for (int i = 0; i < sps; ++i) {
+            // A reversal turns the amplitude from +1 to -1 along a half cosine
+            float amp = reverse ? sign * cosf((float)M_PI * i / sps) : sign;
+            phi += 2 * (float)M_PI * hz / 12000;
+            pcm.push_back((int16_t)(9000 * amp * sinf(phi)));
+        }
+        sign = reverse ? -sign : sign;
+    }
+    return pcm;
+}
+
+static void test_scan_psk()
+{
+    std::vector<int16_t> pcm = psk(31.25f, 1500, 14);
+    addNoise(pcm, 600);
+    expectMode(digi::ScanMode::PSK31, scan(pcm));
+    pcm = psk(62.5f, 1100, 14);
+    addNoise(pcm, 600);
+    expectMode(digi::ScanMode::PSK63, scan(pcm));
+}
+
+static void test_scan_sstv()
+{
+    digi::SstvEncoder enc;
+    enc.begin(digi::SstvMode::MartinM1, sstvPattern, nullptr);
+    std::vector<int16_t> pcm(14 * 12000);
+    size_t pos = 0;
+    while (pos < pcm.size()) {
+        size_t n = enc.read(pcm.data() + pos, std::min<size_t>(480, pcm.size() - pos));
+        if (n == 0) {
+            break;
+        }
+        pos += n;
+    }
+    addNoise(pcm, 600);
+    expectMode(digi::ScanMode::SSTV, scan(pcm));
+
+    enc.begin(digi::SstvMode::Robot36, sstvPattern, nullptr);
+    std::fill(pcm.begin(), pcm.end(), 0);
+    pos = 0;
+    while (pos < pcm.size()) {
+        size_t n = enc.read(pcm.data() + pos, std::min<size_t>(480, pcm.size() - pos));
+        if (n == 0) {
+            break;
+        }
+        pos += n;
+    }
+    addNoise(pcm, 600);
+    expectMode(digi::ScanMode::SSTV, scan(pcm));
+}
+
+static void test_scan_wefax()
+{
+    FaxSender tx;
+    for (int i = 0; i < 30; ++i) {
+        tx.gradientLine();
+    }
+    addNoise(tx.pcm, 600);
+    expectMode(digi::ScanMode::WEFAX, scan(tx.pcm));
+}
+
+static void test_scan_noise_and_carrier()
+{
+    std::vector<int16_t> pcm(12 * 12000, 0);
+    addNoise(pcm, 600);
+    expectMode(digi::ScanMode::None, scan(pcm));
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        pcm[i] = (int16_t)(pcm[i] + 5000 * sinf(2 * (float)M_PI * 1750 * i / 12000));
+    }
+    expectMode(digi::ScanMode::Carrier, scan(pcm));
+
+    // A tone of a few bits in an otherwise silent input is no signal
+    for (size_t i = 0; i < pcm.size(); ++i) {
+        pcm[i] = (int16_t)lrintf(2.0f * sinf(2 * (float)M_PI * 894 * i / 12000));
+    }
+    digi::ScanResult r = scan(pcm);
+    expectMode(digi::ScanMode::None, r);
+    TEST_ASSERT_TRUE(r.quiet);
+}
+
+static void test_scan_target()
+{
+    // FT8 and CW at once: the stronger is found, the other when chosen
+    std::vector<int16_t> ft = synthSlot("CQ DL1ABC JO62", 1800);
+    std::vector<int16_t> b = synthSlot("CQ DL1ABC JO62", 1800);
+    ft.insert(ft.end(), b.begin(), b.end());
+    std::vector<int16_t> cw = repeatTo(keyCw("CQ CQ CQ DE DL1ABC DL1ABC PSE K", 18, 700, 0.15f), 30);
+    std::vector<int16_t> pcm = mix(ft, cw);
+    addNoise(pcm, 600);
+    expectMode(digi::ScanMode::FT8, scan(pcm));
+    expectMode(digi::ScanMode::CW, scan(pcm, 690));
+}
+
+static void scaleTo(std::vector<int16_t> &pcm, float gain)
+{
+    for (auto &v : pcm) {
+        v = (int16_t)(v * gain);
+    }
+}
+static void test_scan_weak_signals()
+{
+    // 0 dB in 2500 Hz: all are named; at -6 dB nothing is named wrongly
+    for (float snr : {0.0f, -6.0f}) {
+        float noise = 3000;
+        float a = sqrtf(2 * noise * noise * 2500 / 6000 * powf(10, snr / 10));
+        auto check = [&](std::vector<int16_t> pcm, float peak, digi::ScanMode want) {
+            scaleTo(pcm, a / peak);
+            addNoise(pcm, noise);
+            digi::ScanResult r = scan(pcm);
+            if (snr == 0.0f || r.mode != digi::ScanMode::Unknown) {
+                expectMode(want, r);
+            }
+        };
+        std::vector<int16_t> pcm = synthSlot("CQ DL1ABC JO62", 1200);
+        std::vector<int16_t> b = synthSlot("DL1ABC OK1XYZ JN79", 1200);
+        pcm.insert(pcm.end(), b.begin(), b.end());
+        check(pcm, 16384, digi::ScanMode::FT8);
+        digi::RttyConfig cfg;
+        check(repeatTo(sendRtty("RYRYRY CQ CQ DE DL1ABC DL1ABC PSE K THE QUICK BROWN FOX 1234567890 ", cfg), 14), 9830,
+              digi::ScanMode::RTTY);
+        check(repeatTo(keyCw("CQ CQ CQ DE DL1ABC DL1ABC PSE K", 20, 650), 14), 9830, digi::ScanMode::CW);
+        check(repeatTo(sitorAudio(sitorCodes(kNavtexMessage)), 14), 9830, digi::ScanMode::NAVTEX);
+        check(psk(31.25f, 1500, 14), 9000, digi::ScanMode::PSK31);
+    }
+}
+
 int main()
 {
     UNITY_BEGIN();
@@ -1575,5 +1820,16 @@ int main()
     RUN_TEST(test_sstv_without_header_and_with_noise);
     RUN_TEST(test_wefax_picture_and_phasing);
     RUN_TEST(test_wefax_manual_shift);
+    RUN_TEST(test_scan_ft8);
+    RUN_TEST(test_scan_ft4);
+    RUN_TEST(test_scan_rtty);
+    RUN_TEST(test_scan_navtex);
+    RUN_TEST(test_scan_cw);
+    RUN_TEST(test_scan_psk);
+    RUN_TEST(test_scan_sstv);
+    RUN_TEST(test_scan_wefax);
+    RUN_TEST(test_scan_noise_and_carrier);
+    RUN_TEST(test_scan_target);
+    RUN_TEST(test_scan_weak_signals);
     return UNITY_END();
 }

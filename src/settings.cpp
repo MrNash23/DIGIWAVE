@@ -29,6 +29,7 @@ void Settings::load()
     dial_navtex_hz = p.getUInt("dialnx", dial_navtex_hz);
     dial_wefax_hz = p.getUInt("dialwf", dial_wefax_hz);
     dial_sstv_hz = p.getUInt("dialsv", dial_sstv_hz);
+    dial_scan_hz = p.getUInt("dialsc", dial_scan_hz);
     tx_hz = p.getInt("txhz", tx_hz);
     tx_level = p.getInt("txlvl", tx_level);
     volume = p.getInt("vol", volume);
@@ -78,6 +79,7 @@ void Settings::save() const
     p.putUInt("dialnx", dial_navtex_hz);
     p.putUInt("dialwf", dial_wefax_hz);
     p.putUInt("dialsv", dial_sstv_hz);
+    p.putUInt("dialsc", dial_scan_hz);
     p.remove("dial");
     p.putInt("txhz", tx_hz);
     p.putInt("txlvl", tx_level);

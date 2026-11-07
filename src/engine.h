@@ -6,6 +6,7 @@
 
 #include <ft8_decoder.h>
 #include <ft8_qso.h>
+#include <mode_scanner.h>
 
 #include "hal/audio_if.h"
 #include "hal/ptt_if.h"
@@ -14,8 +15,8 @@
 /// the audio path. Everything here may be called from the UI thread.
 namespace engine {
 
-enum class Mode { FT8, FT4, CW, RTTY, NAVTEX, WEFAX, SSTV };
-constexpr int kModes = 7;
+enum class Mode { FT8, FT4, CW, RTTY, NAVTEX, WEFAX, SSTV, SCAN };
+constexpr int kModes = 8;
 
 const char *modeName(Mode m);
 bool isSlotMode(Mode m);   // FT8, FT4
@@ -194,5 +195,14 @@ SstvState sstvState();
 void sstvStart(int format);
 void sstvStop();
 const char *sstvFormatName(int format);
+
+// --- mode scanner (experimental) -------------------------------------------------------
+
+/// The latest guess at the signal looked at; seq increments with every analysis.
+digi::ScanResult scanResult(uint32_t *seq);
+
+/// Looks at the signal nearest to this audio frequency; 0 picks the strongest.
+void scanTarget(float hz);
+float scanTargetHz();
 
 }  // namespace engine

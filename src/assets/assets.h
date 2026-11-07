@@ -20,7 +20,7 @@ extern const lv_image_dsc_t img_tile_wefax;  // 86 x 86
 extern const lv_image_dsc_t img_tile_sstv;  // 86 x 86
 extern const lv_image_dsc_t img_tile_logbook;  // 86 x 86
 extern const lv_image_dsc_t img_tile_setup;  // 86 x 86
-extern const lv_image_dsc_t img_tile_wifi;  // 86 x 86
+extern const lv_image_dsc_t img_tile_scan;  // 86 x 86
 extern const lv_image_dsc_t img_status_gps_fix;  // 16 x 16
 extern const lv_image_dsc_t img_status_gps_no_fix;  // 16 x 16
 extern const lv_image_dsc_t img_status_wifi_on;  // 16 x 16

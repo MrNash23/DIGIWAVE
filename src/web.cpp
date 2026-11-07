@@ -297,6 +297,14 @@ void handleState()
     } else if (st.mode == engine::Mode::NAVTEX) {
         snprintf(buf, sizeof(buf), "centre %d Hz%s  %s", settings.navtex_center, st.option ? " rev" : "",
                  st.locked ? "in step" : "searching");
+    } else if (st.mode == engine::Mode::SCAN) {
+        digi::ScanResult r = engine::scanResult(nullptr);
+        if (r.mode == digi::ScanMode::None) {
+            snprintf(buf, sizeof(buf), "listening");
+        } else {
+            snprintf(buf, sizeof(buf), "%s %d %%  %d-%d Hz  %.2f Bd  shift %d Hz", digi::scanModeName(r.mode), r.confidence,
+                     (int)r.low_hz, (int)r.high_hz, r.baud, (int)(r.shift_hz + 0.5f));
+        }
     } else {
         buf[0] = '\0';
     }
