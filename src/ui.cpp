@@ -3299,6 +3299,115 @@ void updateGridFromGps()
     }
 }
 
+// --- Keyboard ------------------------------------------------------------------------
+// The library switches its Space, Shift and Alt modes over on every press and
+// every release of those keys. One lost event left a mode reversed until a
+// restart: with Space reversed every letter became a digit and no shortcut
+// worked any more. The raw events are decoded here instead; a modifier is down
+// exactly while the last event of its key was a press.
+
+constexpr char kKeymap[4][10] = {
+    {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'},
+    {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '\n'},
+    {'\0', 'z', 'x', 'c', 'v', 'b', 'n', 'm', '\0', '\0'},
+    {' ', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0'},
+};
+// With Space held
+constexpr char kSymbolMap[4][10] = {
+    {'1', '2', '3', '4', '5', '6', '7', '8', '9', '0'},
+    {'*', '/', '+', '-', '=', ':', '\'', '"', '@', '\0'},
+    {'\0', '_', '$', ';', '?', '!', ',', '.', '\0', '\0'},
+    {'\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0'},
+};
+constexpr uint8_t kKeyAlt = 20, kKeyB = 25, kKeyShift = 28, kKeyBackspace = 29, kKeySpace = 30;
+constexpr uint32_t kModifierTimeoutMs = 10000;  // nobody holds a modifier this long; its release was lost
+
+bool space_down = false, space_used = false, shift_down = false, alt_down = false;
+uint32_t modifier_at = 0;
+bool kb_light = false;
+char key_queue[16];
+uint8_t key_head = 0, key_tail = 0;
+
+void pushKey(char c)
+{
+    uint8_t next = (key_head + 1) % sizeof(key_queue);
+    if (next != key_tail) {
+        key_queue[key_head] = c;
+        key_head = next;
+    }
+}
+
+/// Called by the library for every event of the keyboard chip
+void keyEvent(bool pressed, uint8_t raw)
+{
+    if (raw == 0 || raw > 40) {
+        return;  // above 96 are the chip's GPIO lines; the matrix has 4 x 10 keys
+    }
+    uint8_t k = raw - 1;
+    switch (k) {
+    case kKeySpace:
+        // Space alone types a space when it is let go; held, it gives digits and symbols
+        if (!pressed && space_down && !space_used) {
+            pushKey(' ');
+        }
+        space_down = pressed;
+        space_used = false;
+        modifier_at = millis();
+        return;
+    case kKeyShift:
+        shift_down = pressed;
+        modifier_at = millis();
+        return;
+    case kKeyAlt:
+        alt_down = pressed;
+        modifier_at = millis();
+        return;
+    case kKeyBackspace:
+        if (pressed) {
+            pushKey('\b');
+        }
+        return;
+    default:
+        break;
+    }
+    if (!pressed) {
+        return;
+    }
+    if (alt_down && k == kKeyB) {
+        kb_light = !kb_light;  // Alt + B: keyboard light
+        instance.kb.setBrightness(kb_light ? 127 : 0);
+        return;
+    }
+    char c = space_down ? kSymbolMap[k / 10][k % 10] : kKeymap[k / 10][k % 10];
+    space_used = space_used || space_down;
+    if (shift_down) {
+        c = (char)toupper((unsigned char)c);
+    }
+    if (c != '\0') {
+        pushKey(c);
+    }
+}
+
+/// The next typed character, false if there is none
+bool nextKey(char *c)
+{
+    // Each call into the library hands at most one event to keyEvent()
+    for (int i = 0; i < 4 && key_head == key_tail; ++i) {
+        instance.getKeyChar(nullptr);
+    }
+    if ((space_down || shift_down || alt_down) && millis() - modifier_at > kModifierTimeoutMs) {
+        Serial.printf("[kb] release of a modifier lost (space %d, shift %d, alt %d); cleared\n", space_down, shift_down,
+                      alt_down);
+        space_down = shift_down = alt_down = false;
+    }
+    if (key_head == key_tail) {
+        return false;
+    }
+    *c = key_queue[key_tail];
+    key_tail = (key_tail + 1) % sizeof(key_queue);
+    return true;
+}
+
 void pollInput()
 {
     static bool was_pressed = false;
@@ -3326,7 +3435,7 @@ void pollInput()
             overlayChoose();
         }
         char key = 0;
-        while (overlay_open && instance.getKeyChar(&key) == KB_PRESSED) {
+        while (overlay_open && nextKey(&key)) {
             last_input = millis();
             overlayKey(key);
         }
@@ -3397,7 +3506,7 @@ void pollInput()
     }
 
     char c = 0;
-    while (instance.getKeyChar(&c) == KB_PRESSED) {
+    while (nextKey(&c)) {
         last_input = millis();
         if (display_off) {
             setDisplayOff(false);
@@ -3518,6 +3627,7 @@ void begin()
     for (lv_indev_t *indev = lv_indev_get_next(nullptr); indev != nullptr; indev = lv_indev_get_next(indev)) {
         lv_indev_enable(indev, false);
     }
+    instance.kb.setRawCallback(keyEvent);
     buildPalette();
     buildSlot();
     buildText();
